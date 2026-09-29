@@ -8,6 +8,7 @@ from typing import Any, TYPE_CHECKING
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.state import AgentState
 from src.infra.llm import CostTracker, get_client, pick_model, with_cache_control, convert_to_openai_format
+from src.safety.output_filter import StreamRedactor
 from src.safety.tool_guard import is_tool_allowed
 from src.skills.loader import invoke_skill
 from src.tools.base import ToolRegistry
@@ -16,6 +17,81 @@ if TYPE_CHECKING:
     from src.settings_user import UserLLMConfig
 
 MAX_ITERATIONS = 10
+_KB_RETRIEVAL_LIMIT = 5
+
+
+async def retrieve_node(
+    state: AgentState,
+    *,
+    registry: ToolRegistry,
+    emit,
+    limit: int = _KB_RETRIEVAL_LIMIT,
+) -> AgentState:
+    """v3-M8 (perf) KB-mode entry: run ONE ``search_kb`` up-front.
+
+    KB chat used to let the LLM decide how many times to search, which cost a
+    full (non-streaming) LLM round-trip per retrieval. Instead we embed the
+    current question once, inject the chunks as a synthetic
+    ``assistant(tool_use search_kb)`` + ``user(tool_result)`` pair, then hand
+    off to ``plan_node`` which generates the answer directly. ``search_kb`` is
+    hidden from the plan schema (see build_graph) so it can't be re-invoked.
+    """
+    if state.get("retrieved"):
+        return state
+    query = _last_user_text(state.get("messages", []))
+    if not query:
+        return state
+
+    await emit({"event": "tool_start", "name": "search_kb", "input": {"query": query}})
+    result = await registry.call("search_kb", {"query": query, "limit": limit})
+    await emit(
+        {
+            "event": "tool_end",
+            "name": "search_kb",
+            "latency_ms": result.latency_ms,
+            "ok": result.error is None,
+            "error": result.error,
+        }
+    )
+    chunks = result.text if result.error is None else f"[tool error] {result.error}"
+
+    tcid = "kb-autoretrieval-1"
+    messages = list(state.get("messages") or [])
+    messages.append(
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": tcid, "name": "search_kb", "input": {"query": query}}
+            ],
+        }
+    )
+    messages.append(
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": tcid,
+                    "content": chunks,
+                    "is_error": result.error is not None,
+                }
+            ],
+        }
+    )
+
+    log = list(state.get("tool_call_log") or [])
+    log.append(
+        {
+            "id": tcid,
+            "name": "search_kb",
+            "input": {"query": query},
+            "result": chunks,
+            "latency_ms": result.latency_ms,
+            "error": result.error,
+        }
+    )
+
+    return {**state, "messages": messages, "tool_call_log": log, "retrieved": True}
 
 
 async def plan_node(
@@ -27,6 +103,8 @@ async def plan_node(
     include_travel_skill: bool = True,
     include_kb_skill: bool = False,
     llm_cfg: "UserLLMConfig | None" = None,
+    emit=None,
+    hidden_tools: frozenset[str] = frozenset(),
 ) -> AgentState:
     """LLM decides next action: call tools, call skill, or finish.
 
@@ -43,6 +121,12 @@ async def plan_node(
     history. Requires ``conversation_id`` + ``user_id`` in state; when either
     is missing (old frontend) or short-term memory is off, L4 is simply
     omitted → identical to M1.
+
+    v3-M8 (perf): when ``emit`` is wired the LLM call is streamed and text
+    deltas are forwarded as ``token`` SSE events as they arrive (true
+    streaming — first token reaches the client without waiting for the whole
+    answer). ``hidden_tools`` lets KB mode drop ``search_kb`` from the schema
+    once the ``retrieve`` node has already fetched chunks.
     """
     from src.agent.context_builder import build_layered_prompt
     from src.agent.prompts import build_context_sections
@@ -62,7 +146,9 @@ async def plan_node(
         extra.append(_skill_tool_schema())
     if include_kb_skill:
         extra.append(_kb_skill_tool_schema())
-    tools_schema = registry.all_schemas() + extra
+    tools_schema = [
+        t for t in registry.all_schemas() if t.get("name") not in hidden_tools
+    ] + extra
     model = pick_model(messages, tools_schema, llm_cfg)
     client = get_client(llm_cfg)
 
@@ -139,28 +225,86 @@ async def plan_node(
     else:
         is_anthropic = s.llm_provider == "anthropic"
 
+    # v3-M8: with emit wired we stream the completion and forward text deltas
+    # as ``token`` events as they arrive. StreamRedactor holds back a short tail
+    # so a PII pattern is never split across two emitted chunks.
+    streaming = emit is not None
+    redactor = StreamRedactor() if streaming else None
+
+    async def _emit_text(delta: str) -> None:
+        if redactor is None or not delta:
+            return
+        piece = redactor.feed(delta)
+        if piece:
+            await emit({"event": "token", "text": piece})
+
+    async def _flush_text() -> None:
+        if redactor is None:
+            return
+        tail = redactor.flush()
+        if tail:
+            await emit({"event": "token", "text": tail})
+
     if not is_anthropic:
         # OpenAI-compatible (DeepSeek, OpenAI, vLLM, Together, Groq, LMStudio, etc.)
         _, openai_messages, openai_tools = convert_to_openai_format(
             layered.messages, tools_schema,
         )
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": layered.system_text}] + openai_messages,
-            tools=openai_tools if openai_tools else None,
-            max_tokens=2048,
-        )
-        cost.add(model, resp.usage)
-
-        choice = resp.choices[0]
-        text_parts: list[str] = []
+        req: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "system", "content": layered.system_text}] + openai_messages,
+            "tools": openai_tools if openai_tools else None,
+            "max_tokens": 2048,
+        }
+        answer_text = ""
         tool_calls: list[dict[str, Any]] = []
 
-        if choice.message.content:
-            text_parts.append(choice.message.content)
-
-        if choice.message.tool_calls:
-            for tc in choice.message.tool_calls:
+        if streaming:
+            stream = await client.chat.completions.create(**req, stream=True)
+            acc: dict[int, dict[str, str]] = {}
+            usage = None
+            async for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    usage = chunk.usage
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = choices[0].delta
+                if delta is None:
+                    continue
+                content = getattr(delta, "content", None)
+                if content:
+                    answer_text += content
+                    await _emit_text(content)
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    slot = acc.setdefault(
+                        getattr(tc, "index", 0) or 0,
+                        {"id": "", "name": "", "arguments": ""},
+                    )
+                    if tc.id:
+                        slot["id"] = tc.id
+                    fn = getattr(tc, "function", None)
+                    if fn is not None:
+                        if fn.name:
+                            slot["name"] = fn.name
+                        if fn.arguments:
+                            slot["arguments"] += fn.arguments
+            if usage is not None:
+                cost.add(model, usage)
+            tool_calls = [
+                {
+                    "id": s["id"],
+                    "name": s["name"],
+                    "input": json.loads(s["arguments"]) if s["arguments"] else {},
+                }
+                for _, s in sorted(acc.items())
+            ]
+        else:
+            resp = await client.chat.completions.create(**req)
+            cost.add(model, resp.usage)
+            choice = resp.choices[0]
+            answer_text = choice.message.content or ""
+            for tc in choice.message.tool_calls or []:
                 tool_calls.append({
                     "id": tc.id,
                     "name": tc.function.name,
@@ -169,8 +313,8 @@ async def plan_node(
 
         # Build assistant message for history
         assistant_content = []
-        if text_parts:
-            assistant_content.append({"type": "text", "text": " ".join(text_parts)})
+        if answer_text:
+            assistant_content.append({"type": "text", "text": answer_text})
         for tc in tool_calls:
             assistant_content.append({
                 "type": "tool_use",
@@ -181,33 +325,58 @@ async def plan_node(
     else:
         # Anthropic API
         system_blocks = with_cache_control(layered.system_blocks, llm_cfg)
-        resp = await client.messages.create(
-            model=model,
-            max_tokens=2048,
-            system=system_blocks,
-            messages=layered.messages,
-            tools=tools_schema or None,
-        )
-        cost.add(model, resp.usage)
+        areq: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 2048,
+            "system": system_blocks,
+            "messages": layered.messages,
+            "tools": tools_schema or None,
+        }
+        answer_text = ""
+        tool_calls = []
 
-        text_parts: list[str] = []
-        tool_calls: list[dict[str, Any]] = []
-        for block in resp.content:
-            if block.type == "text":
-                text_parts.append(block.text)
-            elif block.type == "tool_use":
-                tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+        if streaming:
+            parts: list[str] = []
+            async with client.messages.stream(**areq) as stream:
+                async for delta in stream.text_stream:
+                    parts.append(delta)
+                    await _emit_text(delta)
+                final_msg = await stream.get_final_message()
+            cost.add(model, final_msg.usage)
+            answer_text = "".join(parts)
+            tool_calls = [
+                {"id": b.id, "name": b.name, "input": b.input}
+                for b in final_msg.content
+                if b.type == "tool_use"
+            ]
+            assistant_content = [
+                b.model_dump() if hasattr(b, "model_dump") else dict(b)
+                for b in final_msg.content
+            ]
+        else:
+            resp = await client.messages.create(**areq)
+            cost.add(model, resp.usage)
+            for block in resp.content:
+                if block.type == "text":
+                    answer_text = f"{answer_text}\n{block.text}" if answer_text else block.text
+                elif block.type == "tool_use":
+                    tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
+            assistant_content = [
+                b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in resp.content
+            ]
 
-        assistant_content = [
-            b.model_dump() if hasattr(b, "model_dump") else dict(b) for b in resp.content
-        ]
+    if streaming:
+        await _flush_text()
 
     new_messages = messages + [{"role": "assistant", "content": assistant_content}]
     final_report: str | None = state.get("final_report")
 
     # Stop condition: model returns text only AND no pending tools.
-    if not tool_calls and text_parts and not final_report:
-        final_report = "\n".join(text_parts)
+    answer_streamed = False
+    if not tool_calls and answer_text and not final_report:
+        final_report = answer_text
+        # Signal the SSE layer that this answer already left via token events.
+        answer_streamed = streaming
 
     return {
         **state,
@@ -215,6 +384,9 @@ async def plan_node(
         "pending_tool_calls": tool_calls,
         "iterations": iters + 1,
         "final_report": final_report,
+        # v3-M8 (perf): True when this final answer was already pushed to the
+        # client token-by-token from plan_node → SSE layer must not replay it.
+        "answer_streamed": answer_streamed,
         "cost_usd": cost.usd,
         # v3-M2: persist the (possibly empty) L4 summary so subsequent plan
         # iterations within this request skip the Redis/PG re-read.

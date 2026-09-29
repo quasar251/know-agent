@@ -41,6 +41,7 @@ backups/
 # Internal docs (not for public repo)
 docs/
 PROGRESS.md
+files/
 
 # AI assistant / agent tool configs (per-developer, like .claude/)
 .agents/

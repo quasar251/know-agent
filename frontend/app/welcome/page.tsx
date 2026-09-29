@@ -48,7 +48,7 @@ export default function WelcomePage() {
               使用场景
             </a>
             <a
-              href="https://github.com/GU-Cryptography/anykb"
+              href="https://github.com/GU-Cryptography/know"
               target="_blank"
               rel="noreferrer"
               className="transition hover:text-fg"
@@ -156,7 +156,7 @@ export default function WelcomePage() {
                   <div className="rounded-lg border bg-accent/5 px-4 py-3 text-sm">
                     <div className="mb-2 flex items-center gap-2 text-xs text-accent">
                       <Sparkles className="h-3.5 w-3.5" />
-                      AnyKB · 命中 3 篇论文
+                      know · 命中 3 篇论文
                     </div>
                     Q (Query) 代表当前位置想"查询什么"，K (Key) 是其他位置提供的"标签"，
                     V (Value) 是实际内容。Attention(Q,K,V) = softmax(QK^T/√d) · V…
@@ -321,7 +321,7 @@ export default function WelcomePage() {
             </div>
             <div className="flex items-center gap-5 text-sm text-muted">
               <a
-                href="https://github.com/GU-Cryptography/anykb"
+                href="https://github.com/GU-Cryptography/know"
                 target="_blank"
                 rel="noreferrer"
                 className="transition hover:text-fg"

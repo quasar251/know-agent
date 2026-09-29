@@ -3,7 +3,7 @@ import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import "./globals.css";
 
-const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "AnyKB";
+const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "know";
 
 export const metadata: Metadata = {
   title: APP_NAME,
@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 // Inline script that runs synchronously before paint so the dark class is
 // applied before the first frame — avoids the flash of light theme for
 // users who prefer dark.
-const NO_FLASH = `(function(){try{var t=localStorage.getItem('anykb:theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);}catch(e){}})()`;
+const NO_FLASH = `(function(){try{var t=localStorage.getItem('know:theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);}catch(e){}})()`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

@@ -1,7 +1,7 @@
 /**
- * One-time localStorage namespace migration: `travelgpt:*` → `anykb:*`.
+ * One-time localStorage namespace migration: `travelgpt:*` → `know:*`.
  *
- * The app was renamed from "TravelGPT" to "AnyKB" in 2026-05-14. Existing
+ * The app was renamed from "TravelGPT" to "know" in 2026-05-14. Existing
  * users had auth tokens, conversation history and theme preference stored
  * under the old prefix; we copy them over on first load after the rename
  * so nobody gets logged out / loses chats.
@@ -11,9 +11,9 @@
  * mid-migration leaves the user in a recoverable state.
  */
 
-const SENTINEL_KEY = "anykb:_migrated_from_travelgpt";
+const SENTINEL_KEY = "know:_migrated_from_travelgpt";
 const OLD_PREFIX = "travelgpt:";
-const NEW_PREFIX = "anykb:";
+const NEW_PREFIX = "know:";
 
 export function migrateLegacyKeys(): void {
   if (typeof window === "undefined") return;

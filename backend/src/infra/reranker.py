@@ -6,8 +6,10 @@ and returns reordered (idx, relevance_score) pairs via a cross-encoder model.
 Why a separate module from embedding.py?
   - Different protocol (Cohere /rerank shape, not OpenAI /embeddings).
   - Different cost profile (one call per query, not per doc).
-  - Opt-in: when no `cfg` is provided, callers get a no-op passthrough that
-    returns the original order — there is no `.env` fallback this milestone.
+  - Opt-in: this module itself never reads env. Callers pass `cfg=None` to get
+    a no-op passthrough returning the original order; the env-level fallback
+    (``RERANKER_*``) is synthesized by ``resolve_env_reranker()`` and handed in
+    as a cfg by the callers, so the skip-or-rerank decision stays in one place.
 
 The Cohere /rerank request shape is the de-facto standard — SiliconFlow,
 Cohere, Jina, TEI, vLLM with reranker plugins all accept the same JSON.

@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     log.info("shutdown")
 
 
-app = FastAPI(title="AnyKB", version="3.1.0", lifespan=lifespan)
+app = FastAPI(title="know", version="3.1.0", lifespan=lifespan)
 
 # v2-M7 — optional Logfire monitoring. Enabled only when both:
 #   1) `pip install -e '.[monitoring]'` (or pip install logfire)
@@ -92,7 +92,7 @@ if _logfire_token:
 
         logfire.configure(
             token=_logfire_token,
-            service_name=os.getenv("LOGFIRE_SERVICE_NAME", "anykb-backend"),
+            service_name=os.getenv("LOGFIRE_SERVICE_NAME", "know-backend"),
         )
         logfire.instrument_fastapi(app, capture_headers=False)
         logfire.instrument_httpx()
@@ -247,11 +247,17 @@ def _run_chat_session(
                 initial_state["conversation_id"] = conversation_id
                 initial_state["user_id"] = user.id
             final_state = await graph.ainvoke(initial_state)
-            report = redact_pii(final_state.get("final_report") or "")
-            await queue.put({"event": "report_start"})
-            for piece in _chunks(report, size=8):
-                await queue.put({"event": "token", "text": piece})
-                await asyncio.sleep(0.02)
+            # v3-M8 (perf): when plan_node already streamed the answer token-by-
+            # token, do NOT replay final_report here (it would duplicate text).
+            # Skill reports (travel / kb report) still arrive via final_report
+            # with answer_streamed falsy → replay as before so their markdown
+            # gets the paced ``token`` treatment.
+            if not final_state.get("answer_streamed"):
+                report = redact_pii(final_state.get("final_report") or "")
+                await queue.put({"event": "report_start"})
+                for piece in _chunks(report, size=8):
+                    await queue.put({"event": "token", "text": piece})
+                    await asyncio.sleep(0.02)
             await queue.put(
                 {
                     "event": "done",

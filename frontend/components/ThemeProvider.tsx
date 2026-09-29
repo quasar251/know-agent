@@ -13,7 +13,7 @@ type Ctx = {
 
 const ThemeContext = createContext<Ctx | null>(null);
 
-const STORAGE_KEY = "anykb:theme";
+const STORAGE_KEY = "know:theme";
 
 function readStored(): Theme {
   if (typeof window === "undefined") return "system";
@@ -43,7 +43,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // Mount: hydrate from localStorage + sync the class (the no-flash inline
   // script in layout.tsx has already applied it pre-paint; this just keeps
-  // React state in sync). Also run the one-time travelgpt → anykb migration.
+  // React state in sync). Also run the one-time travelgpt → know migration.
   useEffect(() => {
     migrateLegacyKeys();
     const t = readStored();

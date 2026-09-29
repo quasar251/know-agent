@@ -271,7 +271,7 @@ async def delete_user(
 
 
 # ---------------------------------------------------------------------------
-# Knowledge bases (cross-user)
+# knowledge bases (cross-user)
 # ---------------------------------------------------------------------------
 @router.get("/kbs")
 async def list_kbs(

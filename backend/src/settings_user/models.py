@@ -149,14 +149,44 @@ def resolve_user_embedding(user: "User") -> Optional[UserEmbeddingConfig]:
     )
 
 
-def resolve_user_reranker(user: "User") -> Optional[UserRerankerConfig]:
-    """Return user's reranker config, or None when disabled / unconfigured.
+def resolve_env_reranker() -> Optional[UserRerankerConfig]:
+    """Synthesize a UserRerankerConfig from env (mirrors ``infra/reranker.py``).
 
-    Unlike LLM and embedding, there is no env fallback — reranker is fully
-    opt-in (default off). Callers that get None must skip reranking entirely.
+    Gated on ``RERANKER_ENABLED`` — an unconfigured deployment still gets None
+    so callers keep skipping the rerank pass entirely. Preset fills base_url /
+    model defaults the same way ``infra/embedding.py`` does for embeddings, so
+    `.env` only needs an API key (e.g. the SiliconFlow one).
+    """
+    from src.infra.reranker import PROVIDER_PRESETS
+    from src.settings import get_settings
+
+    s = get_settings()
+    if not bool(s.reranker_enabled):
+        return None
+    provider = (s.reranker_provider or "siliconflow").lower()
+    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["siliconflow"])
+    base_url = s.reranker_base_url or preset["base_url"]
+    model = s.reranker_model or preset["model"]
+    if not (base_url and model):
+        return None
+    return UserRerankerConfig(
+        provider=provider,
+        base_url=base_url.rstrip("/"),
+        api_key=s.reranker_api_key,
+        model=model,
+    )
+
+
+def resolve_user_reranker(user: "User") -> Optional[UserRerankerConfig]:
+    """Return user's reranker config, else the env-level fallback.
+
+    The user path is two-gated (enable toggle + fully populated config). When
+    the user hasn't opted in we fall back to the env reranker (``RERANKER_*``),
+    which is itself gated on ``RERANKER_ENABLED`` — so rerank stays off unless
+    the user OR the deployment opted in. Callers receiving None skip reranking.
     """
     if not _reranker_is_configured(user):
-        return None
+        return resolve_env_reranker()
     enc = getattr(user, "reranker_api_key_enc", None) or ""
     return UserRerankerConfig(
         provider=user.reranker_provider or "",

@@ -73,6 +73,40 @@ class Settings(BaseSettings):
     embedding_model: str = ""         # e.g. BAAI/bge-m3
     embedding_vector_size: int = 0    # 0 = look up from MODEL_DIMS table, then probe
 
+    # ===== Reranker (opt-in second-stage cross-encoder) =====
+    # Cohere-compatible /rerank surface (SiliconFlow / Cohere / Jina / TEI / vLLM).
+    # Preset only fills defaults — explicit URL/API_KEY/MODEL always wins.
+    # Master switch: when True (and base_url+model resolvable) every NON-system
+    # KB search over-fetches 4x then reranks down to top-k. System KBs (travel
+    # demo) always bypass. Default False = rerank off unless explicitly opted in.
+    reranker_enabled: bool = False
+    reranker_provider: str = "siliconflow"   # siliconflow | cohere | openai-compat
+    reranker_base_url: str = ""              # e.g. https://api.siliconflow.cn/v1
+    reranker_api_key: str = ""
+    reranker_model: str = ""                 # e.g. BAAI/bge-reranker-v2-m3
+
+    # ===== Upload limit =====
+    # Max single-upload size in bytes. Scanned handbooks routinely exceed the
+    # old hard-coded 50 MB, so this is env-tunable (MAX_UPLOAD_BYTES). Default
+    # 200 MB. Note: large files are read into memory once during upload.
+    max_upload_bytes: int = 200 * 1024 * 1024
+
+    # ===== OCR (image-only / scanned PDFs → text) =====
+    # When enabled, PDF pages that yield no extractable text are rendered to
+    # images and OCR'd before chunking. Two providers:
+    #   rapidocr    — local & offline; needs `pip install rapidocr-onnxruntime`
+    #   siliconflow — vision LLM over the OpenAI chat surface (reuses the
+    #                 SiliconFlow key, e.g. Qwen2.5-VL); needs network + billing
+    # Master switch OCR_ENABLED. Preset only fills base_url/model — explicit
+    # values always win (same convention as embedding / reranker above).
+    ocr_enabled: bool = False
+    ocr_provider: str = "rapidocr"           # rapidocr | siliconflow | openai-compat
+    ocr_base_url: str = ""                   # e.g. https://api.siliconflow.cn/v1
+    ocr_api_key: str = ""
+    ocr_model: str = ""                      # e.g. Qwen/Qwen2.5-VL-32B-Instruct
+    ocr_dpi: int = 200                       # page render resolution fed to OCR
+    ocr_max_pages: int = 0                   # 0 = no cap; safety valve for huge scans
+
     # Legacy / fallback fields
     openai_api_key: str = ""
     ollama_url: str = "http://localhost:11434"

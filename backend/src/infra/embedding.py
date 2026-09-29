@@ -63,7 +63,7 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Known model → vector dim. Keep this small and explicit; unknown models fall
+# known model → vector dim. Keep this small and explicit; unknown models fall
 # back to live probe (a single dummy embed call) on first invocation.
 MODEL_DIMS: dict[str, int] = {
     # OpenAI

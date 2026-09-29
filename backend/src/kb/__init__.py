@@ -1,4 +1,4 @@
-"""Knowledge Base (KB) module — M2.
+"""knowledge Base (KB) module — M2.
 
 A KB is a user-owned collection of documents that get parsed, chunked,
 embedded and stored as vectors in a dedicated Qdrant collection

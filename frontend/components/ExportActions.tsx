@@ -34,7 +34,7 @@ export default function ExportActions({ markdown, cost, question }: Props) {
       toast.error("找不到报告内容");
       return;
     }
-    html2pdf().set({ filename: "anykb-report.pdf", margin: 10 }).from(el).save();
+    html2pdf().set({ filename: "know-report.pdf", margin: 10 }).from(el).save();
   };
 
   return (

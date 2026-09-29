@@ -1,7 +1,7 @@
 import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "AnyKB";
+export const APP_NAME = process.env.NEXT_PUBLIC_APP_NAME || "know";
 
 type BrandSize = "sm" | "md" | "lg";
 
@@ -30,7 +30,7 @@ const SIZES: Record<BrandSize, { box: string; icon: string; text: string }> = {
 };
 
 /**
- * AnyKB brand mark — gradient square with Sparkles icon + optional wordmark.
+ * know brand mark — gradient square with Sparkles icon + optional wordmark.
  * Use `size="sm"` in compact bars, `"md"` in sidebar headers, `"lg"` in heroes / auth pages.
  */
 export default function Brand({

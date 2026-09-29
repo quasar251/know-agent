@@ -237,14 +237,14 @@ class QdrantStore:
 #   1. Milvus COSINE returns distance (0=match, 1=orthogonal). We convert to
 #      similarity via `score = 1.0 - distance` so callers see Qdrant semantics.
 #   2. pymilvus 3.0 search `output_fields=['*']` does NOT return dynamic fields,
-#      so we list every known payload key explicitly (`_KNOWN_PAYLOAD_KEYS`).
+#      so we list every known payload key explicitly (`_knowN_PAYLOAD_KEYS`).
 #   3. `drop_collection` on Windows can hit WinError 183 (atomic-rename race in
 #      milvus-lite 3.0); we fall back to physical `shutil.rmtree` of the
 #      collection directory.
 #   4. MilvusClient is sync; all calls go through `asyncio.to_thread` to match
 #      the async store Protocol.
 # ---------------------------------------------------------------------------
-_KNOWN_PAYLOAD_KEYS = [
+_knowN_PAYLOAD_KEYS = [
     # KB ingest (kb/ingest.py)
     "doc_id", "kb_id", "chunk_idx", "text", "filename",
     "source_type", "source_url",
@@ -509,7 +509,7 @@ class MilvusStore:
         expr = _build_milvus_filter_expr(composed)
 
         # Explicit output fields — Milvus 3.0 ignores '*' for dynamic.
-        output_fields = ["vector"] + _KNOWN_PAYLOAD_KEYS
+        output_fields = ["vector"] + _knowN_PAYLOAD_KEYS
 
         raw = await asyncio.to_thread(
             self._client.search,
@@ -627,7 +627,7 @@ class MilvusStore:
             reqs=[dense_req, sparse_req],
             ranker=RRFRanker(k=60),
             limit=limit,
-            output_fields=["vector"] + _KNOWN_PAYLOAD_KEYS,
+            output_fields=["vector"] + _knowN_PAYLOAD_KEYS,
         )
         if group_by:
             kwargs["group_by_field"] = group_by

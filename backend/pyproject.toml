@@ -1,7 +1,7 @@
 [project]
-name = "anykb-backend"
+name = "know-backend"
 version = "3.1.0"
-description = "AnyKB backend — FastAPI + LangGraph private RAG knowledge base"
+description = "know backend — FastAPI + LangGraph private RAG knowledge base"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -46,6 +46,8 @@ dev = [
 ]
 ollama = ["ollama>=0.3"]
 openai = ["openai>=1.30"]
+# OCR of scanned PDFs (OCR_ENABLED=true, OCR_PROVIDER=rapidocr). Local & offline.
+ocr = ["rapidocr-onnxruntime>=1.3"]
 # v2-M7 — optional Logfire monitoring (enable by installing + setting LOGFIRE_TOKEN)
 monitoring = ["logfire>=3.0"]
 # v3-M2 — optional Milvus backend (Lite=embedded local .db, Standalone=server)

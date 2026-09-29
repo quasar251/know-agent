@@ -156,7 +156,7 @@ export async function deleteUser(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge bases
+// knowledge bases
 // ---------------------------------------------------------------------------
 export async function listKbs(
   limit = 50,

@@ -6,7 +6,8 @@ semantics in the calling-side contract (passthrough when cfg is None).
 
 Also covers the resolve_user_reranker toggle gate: even with all five cols
 populated, a False `reranker_enabled` must return None so the chat path
-cleanly skips reranking.
+cleanly skips reranking. When the user hasn't opted in we fall back to the
+env-level reranker (`resolve_env_reranker`, gated on `RERANKER_ENABLED`).
 """
 from __future__ import annotations
 
@@ -146,8 +147,14 @@ async def test_rerank_filters_out_of_range_indices(monkeypatch):
     assert result == [(1, 0.9), (0, 0.1)]
 
 
-def test_resolve_user_reranker_returns_none_when_toggle_off():
+def test_resolve_user_reranker_returns_none_when_toggle_off(monkeypatch):
+    from src.settings_user import models as su_models
     from src.settings_user.models import resolve_user_reranker
+
+    # Isolate the user-level gate: with the env fallback also disabled the
+    # toggle-off path must yield None. (The env fallback itself is covered by
+    # the _falls_back_to_env / _env_reranker tests below.)
+    monkeypatch.setattr(su_models, "resolve_env_reranker", lambda: None)
 
     class FakeUser:
         reranker_enabled = False
@@ -160,8 +167,11 @@ def test_resolve_user_reranker_returns_none_when_toggle_off():
     assert resolve_user_reranker(FakeUser()) is None
 
 
-def test_resolve_user_reranker_returns_none_when_unconfigured():
+def test_resolve_user_reranker_returns_none_when_unconfigured(monkeypatch):
+    from src.settings_user import models as su_models
     from src.settings_user.models import resolve_user_reranker
+
+    monkeypatch.setattr(su_models, "resolve_env_reranker", lambda: None)
 
     class FakeUser:
         reranker_enabled = True   # enabled but missing fields
@@ -171,6 +181,62 @@ def test_resolve_user_reranker_returns_none_when_unconfigured():
         reranker_model = None
 
     assert resolve_user_reranker(FakeUser()) is None
+
+
+def test_resolve_user_reranker_falls_back_to_env(monkeypatch):
+    """Unconfigured user → whatever resolve_env_reranker() yields is returned."""
+    from src.settings_user import models as su_models
+    from src.settings_user.models import UserRerankerConfig
+
+    sentinel = UserRerankerConfig(
+        provider="siliconflow",
+        base_url="https://api.siliconflow.cn/v1",
+        api_key="env-key",
+        model="BAAI/bge-reranker-v2-m3",
+    )
+    monkeypatch.setattr(su_models, "resolve_env_reranker", lambda: sentinel)
+
+    class FakeUser:
+        reranker_enabled = False
+        reranker_provider = None
+        reranker_base_url = None
+        reranker_api_key_enc = None
+        reranker_model = None
+
+    assert su_models.resolve_user_reranker(FakeUser()) is sentinel
+
+
+def test_resolve_env_reranker_gated_on_toggle(monkeypatch):
+    """RERANKER_ENABLED=False → None; True → preset-filled config."""
+    from types import SimpleNamespace
+
+    import src.settings as settings_mod
+    from src.settings_user.models import resolve_env_reranker
+
+    off = SimpleNamespace(
+        reranker_enabled=False,
+        reranker_provider="siliconflow",
+        reranker_base_url="",
+        reranker_api_key="k",
+        reranker_model="",
+    )
+    monkeypatch.setattr(settings_mod, "get_settings", lambda: off)
+    assert resolve_env_reranker() is None
+
+    on = SimpleNamespace(
+        reranker_enabled=True,
+        reranker_provider="siliconflow",
+        reranker_base_url="",     # preset fills it
+        reranker_api_key="k",
+        reranker_model="",        # preset fills it
+    )
+    monkeypatch.setattr(settings_mod, "get_settings", lambda: on)
+    cfg = resolve_env_reranker()
+    assert cfg is not None
+    assert cfg.provider == "siliconflow"
+    assert cfg.base_url == "https://api.siliconflow.cn/v1"
+    assert cfg.model == "BAAI/bge-reranker-v2-m3"
+    assert cfg.api_key == "k"
 
 
 def test_resolve_user_reranker_returns_config_when_enabled_and_configured(monkeypatch):

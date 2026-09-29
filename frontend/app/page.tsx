@@ -148,7 +148,7 @@ export default function Page() {
     let cancelled = false;
     (async () => {
       if (!getToken()) {
-        router.replace("/welcome");
+        router.replace("/login");
         return;
       }
       const u = getUser();

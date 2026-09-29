@@ -1,4 +1,4 @@
-name: anykb
+name: know
 
 services:
   # ===== App DB (PostgreSQL — commercial-grade, multi-worker safe) =====
@@ -6,13 +6,13 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: anykb
-      POSTGRES_USER: anykb
+      POSTGRES_DB: know
+      POSTGRES_USER: know
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U anykb -d anykb"]
+      test: ["CMD-SHELL", "pg_isready -U know -d know"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -48,7 +48,7 @@ services:
         condition: service_healthy
     environment:
       # --- App DB ---
-      DATABASE_URL: postgresql+asyncpg://anykb:${POSTGRES_PASSWORD}@postgres:5432/anykb
+      DATABASE_URL: postgresql+asyncpg://know:${POSTGRES_PASSWORD}@postgres:5432/know
 
       # --- Vector store (Milvus Lite embedded) ---
       VECTOR_STORE: milvus
@@ -93,7 +93,7 @@ services:
       - backend
     environment:
       BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_APP_NAME: AnyKB
+      NEXT_PUBLIC_APP_NAME: know
       NEXT_TELEMETRY_DISABLED: "1"
     expose:
       - "3000"
@@ -109,7 +109,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/anykb.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/know.conf:/etc/nginx/conf.d/default.conf:ro
       # Let's Encrypt certificates (managed by host certbot, mounted read-only).
       - /etc/letsencrypt:/etc/letsencrypt:ro
       # ACME http-01 challenge webroot — kept for future webroot-based renewal.

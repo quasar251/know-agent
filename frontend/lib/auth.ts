@@ -7,8 +7,8 @@
  * you'd use httpOnly cookies set by the backend; that's a v2 concern.
  */
 
-const TOKEN_KEY = "anykb:token";
-const USER_KEY = "anykb:user";
+const TOKEN_KEY = "know:token";
+const USER_KEY = "know:user";
 
 export type User = {
   id: string;

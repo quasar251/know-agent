@@ -1,9 +1,9 @@
-# AnyKB — 私有 RAG 知识库 + 透明 Agent
+# know — 私有 RAG 知识库 + 透明 Agent
 
 > 上传文档 / 抓取网页 → 选中 KB → 用一句话问出来。
 > 30 秒内吐一份带原文引用的 markdown 报告，全过程思考链可视。
 
-**版本**：**v3.3-memory（2026-07-18 / 双层记忆系统）** · v3.2-admin（2026-06-02 / 后台管理系统）· v3.1.0（2026-05-25 / Docker + HTTPS）· **线上**：https://anykb.cc.cd · **协议**：MIT
+**版本**：**v3.3-memory（2026-07-18 / 双层记忆系统）** · v3.2-admin（2026-06-02 / 后台管理系统）· v3.1.0（2026-05-25 / Docker + HTTPS）· **线上**：https://know.cc.cd · **协议**：MIT
 
 ---
 
@@ -201,7 +201,7 @@ ai-agent/
 │   │   ├── settings-api.ts        LLM / Embedding / Reranker probe + save
 │   │   ├── conversationStore.ts   Message 类型 + deriveTitle
 │   │   ├── byok-toast.ts          v2-M2: BYOK 422 → toast「去配置」
-│   │   ├── storage-migrate.ts     一次性 anykb:* 命名空间迁移
+│   │   ├── storage-migrate.ts     一次性 know:* 命名空间迁移
 │   │   ├── cn.ts                  clsx + tailwind-merge
 │   │   └── theme.ts               class 策略 dark mode
 │   ├── tailwind.config.ts         语义化 token + dark class 策略
@@ -222,13 +222,12 @@ ai-agent/
 │
 ├── docker-compose.yml             5 服务编排（postgres + redis + backend + frontend + nginx）
 ├── env.docker.example             Docker 部署 env 模板
-├── nginx/anykb.conf               nginx 反代配置（SSE-safe）
+├── nginx/know.conf               nginx 反代配置（SSE-safe）
 ├── scripts/                       运维脚本
 │   ├── deploy.sh                  build + up + 健康检查
 │   ├── backup.sh                  备份 PG + backend-data 卷
 │   └── logs.sh                    tail -f 服务日志
-├── start_local.bat / start_local.sh   一键本地启动（非 Docker）
-├── start.py                       Python 启动器
+├── start_local.bat                一键本地启动（Windows，非 Docker）
 ├── PROGRESS.md                    完整 changelog（M0 → v3-M8.2 + Docker 化）
 └── README.md                      本文档
 ```
@@ -340,7 +339,7 @@ POST   /api/conversations/{id}/finalize     # 结束会话并提取记忆（幂�
 
 ```bash
 # Docker backend 已预装 asyncpg；本地需要：pip install asyncpg
-DATABASE_URL=postgresql+asyncpg://anykb:strong_password@postgres:5432/anykb
+DATABASE_URL=postgresql+asyncpg://know:strong_password@postgres:5432/know
 ```
 
 所有表定义（User / KB / Document / Conversation / Message / KBMember / KBInvitation / **UserMemory（v3.3）**）都是 SQLAlchemy 2.x Mapped 风格，跨 dialect 通用。**加列迁移**：`_migrate_additive_columns` 在每次启动 `create_all` 之后跑，缺列才 `ALTER TABLE ADD COLUMN`，幂等。
@@ -404,9 +403,9 @@ PG + Milvus Standalone 是被 1000+ 公司验证过的组合，资源占用合�
 
 | 服务 | 镜像 | 内容 |
 |---|---|---|
-| `postgres` | `postgres:16-alpine` | App DB（用户 / KB / 文档 / 会话 / 记忆）→ volume `anykb_postgres-data` |
-| `redis` | `redis:7-alpine` | **v3.3** 记忆热存储（短期窗口 / 摘要 / 画像缓存，AOF 持久化 + healthcheck）→ volume `anykb_redis-data` |
-| `backend` | 自建（`./backend/Dockerfile`） | FastAPI + LangGraph + **Milvus Lite 嵌入式** → volume `anykb_backend-data`（`/app/data/milvus_local.db` + uploads） |
+| `postgres` | `postgres:16-alpine` | App DB（用户 / KB / 文档 / 会话 / 记忆）→ volume `know_postgres-data` |
+| `redis` | `redis:7-alpine` | **v3.3** 记忆热存储（短期窗口 / 摘要 / 画像缓存，AOF 持久化 + healthcheck）→ volume `know_redis-data` |
+| `backend` | 自建（`./backend/Dockerfile`） | FastAPI + LangGraph + **Milvus Lite 嵌入式** → volume `know_backend-data`（`/app/data/milvus_local.db` + uploads） |
 | `frontend` | 自建（`./frontend/Dockerfile`） | Next.js 14 standalone build（multi-stage，~150MB） |
 | `nginx` | `nginx:1.27-alpine` | 反代 :80，`/api/chat` 关 buffering 透传 SSE |
 
@@ -417,7 +416,7 @@ PG + Milvus Standalone 是被 1000+ 公司验证过的组合，资源占用合�
 │   /api/...  → backend                      │
 │   /        → frontend                      │
 └──────────────────┬─────────────────────────┘
-                   │ docker network: anykb_default
+                   │ docker network: know_default
    ┌───────────────┼───────────────┐
    ▼               ▼               ▼
 postgres        backend         frontend
@@ -434,7 +433,7 @@ postgres        backend         frontend
 | `docker-compose.yml` | 5 服务编排 + volume + 健康检查 + env 注入（v3.3 起含 redis 与 `MEMORY_*` 调优项） |
 | `backend/Dockerfile` | Python 3.11 slim + `pip install .[milvus] asyncpg` + healthcheck `/health` |
 | `frontend/Dockerfile` | 两阶段 build：builder npm ci + build / runner 只装 `.next/standalone`（~150MB） |
-| `nginx/anykb.conf` | upstream `backend:8000` + `frontend:3000` + SSE-safe 配置 |
+| `nginx/know.conf` | upstream `backend:8000` + `frontend:3000` + SSE-safe 配置 |
 | `env.docker.example` | 模板：POSTGRES_PASSWORD / JWT_SECRET / PUBLIC_URL / BYOK_REQUIRED / ADMIN_EMAILS |
 | `scripts/deploy.sh` | build + up + healthcheck + 日志（**主入口**） |
 | `scripts/backup.sh` | 备份 PG + backend-data volume 到 tarball |
@@ -491,9 +490,9 @@ curl http://localhost/health
 
 | Volume | 内容 | 备份命令 |
 |---|---|---|
-| `anykb_postgres-data` | PG 全部数据 | `./scripts/backup.sh` |
-| `anykb_backend-data` | Milvus Lite `.db` + 用户上传文件 | 同上 |
-| `anykb_redis-data` | **v3.3** Redis AOF（记忆热数据；均有 PG 冷源可重建） | 可不备份 |
+| `know_postgres-data` | PG 全部数据 | `./scripts/backup.sh` |
+| `know_backend-data` | Milvus Lite `.db` + 用户上传文件 | 同上 |
+| `know_redis-data` | **v3.3** Redis AOF（记忆热数据；均有 PG 冷源可重建） | 可不备份 |
 
 `./scripts/backup.sh` 会同时打 PG + backend-data 两个 tarball 到 `./backups/`。
 
@@ -560,7 +559,7 @@ cp env.docker.example .env
 
 ## 八、服务器部署（已实战）
 
-**线上实例**：https://anykb.cc.cd （43.163.245.206 / Ubuntu 24.04 / 2 核 / 1.9 GB / 50 GB）
+**线上实例**：https://know.cc.cd （43.163.245.206 / Ubuntu 24.04 / 2 核 / 1.9 GB / 50 GB）
 
 ### 当前部署架构（Docker compose）
 
@@ -584,11 +583,11 @@ backend       frontend
    │
    ▼
 postgres (postgres:16-alpine)
-  → volume anykb_postgres-data
+  → volume know_postgres-data
 
 data volumes:
-  anykb_postgres-data   (PG 数据)
-  anykb_backend-data    (Milvus Lite + uploads)
+  know_postgres-data   (PG 数据)
+  know_backend-data    (Milvus Lite + uploads)
 ```
 
 ### 部署清单
@@ -598,13 +597,13 @@ data volumes:
 | ✅ docker compose 5 服务全栈 healthy | `restart: unless-stopped` 自启 |
 | ✅ PostgreSQL 16 替代 SQLite | volume 持久化 |
 | ✅ Milvus Lite 嵌入 backend 容器 | volume 持久化 |
-| ✅ **v3.3 Redis 7 记忆热存储**（2026-07-18 上线） | AOF + healthcheck + volume `anykb_redis-data` |
-| ✅ nginx 反代 + SSE buffering off + 60M body limit | `nginx/anykb.conf` |
-| ✅ **HTTPS / Let's Encrypt 证书**（2026-05-25 上线） | `/etc/letsencrypt/live/anykb.cc.cd/`，TLSv1.2+1.3 + HSTS 1 年 |
+| ✅ **v3.3 Redis 7 记忆热存储**（2026-07-18 上线） | AOF + healthcheck + volume `know_redis-data` |
+| ✅ nginx 反代 + SSE buffering off + 60M body limit | `nginx/know.conf` |
+| ✅ **HTTPS / Let's Encrypt 证书**（2026-05-25 上线） | `/etc/letsencrypt/live/know.cc.cd/`，TLSv1.2+1.3 + HSTS 1 年 |
 | ✅ **HTTP → HTTPS 301 自动跳** | nginx :80 block 全部 redirect |
 | ✅ **certbot 自动续期**（每 60 天自动） | systemd timer + renewal-hooks 自动停启 nginx 容器，downtime ~30s |
 | ✅ UFW 防火墙仅开 22 + 80 + 443 | 已启用 |
-| ✅ SSH key | `~/.ssh/anykb_deploy` |
+| ✅ SSH key | `~/.ssh/know_deploy` |
 | ✅ ubuntu 加入 docker 组 | 下次 SSH 登录免 sudo |
 | ✅ scripts/ 一键运维 | `deploy.sh` / `backup.sh` / `logs.sh` |
 | ⏳ 改 root / ubuntu 密码 + 禁用密码登录 | TODO |
@@ -620,7 +619,7 @@ sudo systemctl enable --now docker
 sudo usermod -aG docker $USER  # 重新登录生效
 
 # 2. 拉代码（或 tar pipe 同步）
-mkdir -p ~/anykb && cd ~/anykb
+mkdir -p ~/know && cd ~/know
 # scp / rsync / git clone 你的源码到这里
 
 # 3. 准备 .env
@@ -637,17 +636,17 @@ vim .env  # 填 POSTGRES_PASSWORD / JWT_SECRET / PUBLIC_URL
 
 ```bash
 # 本地（在项目根目录）
-tar -cz backend/src | ssh user@server 'cd ~/anykb && tar -xz'
+tar -cz backend/src | ssh user@server 'cd ~/know && tar -xz'
 
 # 服务器
 ssh user@server
-cd ~/anykb && ./scripts/deploy.sh backend
+cd ~/know && ./scripts/deploy.sh backend
 ```
 
 ### 推荐后续动作
 
 1. **改密码 + 关 SSH 密码登录**（5 分钟） — `passwd ubuntu` + `sudo vi /etc/ssh/sshd_config` 设 `PasswordAuthentication no`
-2. **定时备份** — `crontab -e` 加 `0 3 * * * cd /home/ubuntu/anykb && ./scripts/backup.sh /home/ubuntu/anykb-backups`
+2. **定时备份** — `crontab -e` 加 `0 3 * * * cd /home/ubuntu/know && ./scripts/backup.sh /home/ubuntu/know-backups`
 3. **多 worker** — `backend` Dockerfile CMD 加 `--workers 4`（PG 已经能支持，不再有 SQLite 写冲突）
 4. **Milvus Standalone** — 数据上百万级再考虑（见 §5 切换步骤）
 
@@ -684,17 +683,17 @@ ADMIN_EMAILS=you@example.com,ops@example.com
 
 ### HTTPS 部署细节（已生效）
 
-域名 `anykb.cc.cd` → Let's Encrypt 免费证书：
+域名 `know.cc.cd` → Let's Encrypt 免费证书：
 
 ```bash
 # 证书路径（容器内只读挂载）
-/etc/letsencrypt/live/anykb.cc.cd/fullchain.pem
-/etc/letsencrypt/live/anykb.cc.cd/privkey.pem
+/etc/letsencrypt/live/know.cc.cd/fullchain.pem
+/etc/letsencrypt/live/know.cc.cd/privkey.pem
 
 # 自动续期机制
 systemd timer:  certbot.timer (每天 20:47 检查)
-pre-hook:       /etc/letsencrypt/renewal-hooks/pre/anykb-stop-nginx.sh
-post-hook:      /etc/letsencrypt/renewal-hooks/post/anykb-start-nginx.sh
+pre-hook:       /etc/letsencrypt/renewal-hooks/pre/know-stop-nginx.sh
+post-hook:      /etc/letsencrypt/renewal-hooks/post/know-start-nginx.sh
 
 # 实际续期时间：到期 < 30 天才会真续；约 60 天一次，每次 nginx ~30s downtime（凌晨）
 
@@ -705,7 +704,7 @@ sudo certbot renew --dry-run
 sudo certbot renew
 ```
 
-完整部署细节见服务器上 `/home/ubuntu/anykb-deploy-notes.md`。
+完整部署细节见服务器上 `/home/ubuntu/know-deploy-notes.md`。
 
 ---
 
@@ -746,7 +745,7 @@ sudo certbot renew
 
 ```ini
 BACKEND_URL=http://127.0.0.1:8000           # 后端地址（前端 proxy 转发）
-NEXT_PUBLIC_APP_NAME=AnyKB                  # 显示名
+NEXT_PUBLIC_APP_NAME=know                  # 显示名
 NEXT_PUBLIC_PLAUSIBLE_DOMAIN=               # 可选 Plausible analytics
 NEXT_TELEMETRY_DISABLED=1                   # 关掉 next telemetry
 ```
@@ -792,15 +791,15 @@ cd backend && python -m uvicorn src.app:app --port 8000
 # Docker 模式：备份两个 volume 到 ./backups/
 ./scripts/backup.sh
 # 输出：
-#   ./backups/anykb-pg-2026-05-25-1430.tgz       (PG 全量)
-#   ./backups/anykb-data-2026-05-25-1430.tgz     (Milvus Lite + uploads)
+#   ./backups/know-pg-2026-05-25-1430.tgz       (PG 全量)
+#   ./backups/know-data-2026-05-25-1430.tgz     (Milvus Lite + uploads)
 
 # 恢复（停服 → 替换 volume → 起服）
 docker compose down
-docker run --rm -v anykb_postgres-data:/dst -v $(pwd)/backups:/src alpine \
-  tar xzf /src/anykb-pg-2026-05-25-1430.tgz -C /dst
-docker run --rm -v anykb_backend-data:/dst -v $(pwd)/backups:/src alpine \
-  tar xzf /src/anykb-data-2026-05-25-1430.tgz -C /dst
+docker run --rm -v know_postgres-data:/dst -v $(pwd)/backups:/src alpine \
+  tar xzf /src/know-pg-2026-05-25-1430.tgz -C /dst
+docker run --rm -v know_backend-data:/dst -v $(pwd)/backups:/src alpine \
+  tar xzf /src/know-data-2026-05-25-1430.tgz -C /dst
 ./scripts/deploy.sh
 ```
 
@@ -833,7 +832,7 @@ uv run pytest -q -k "memory or context"   # 只跑记忆 / 上下文相关
 | [docs/architecture.md](docs/architecture.md) | 内部架构 / Agent 状态图 / 解耦设计 |
 | [docs/deploy.md](docs/deploy.md) | 详细部署（含 systemd / nginx / Linux 迁移） |
 | [docs/rag-primer.md](docs/rag-primer.md) | **入门**：RAG / Embedding / BM25 / Hybrid / Rerank 从零讲 |
-| [docs/milvus-guide.md](docs/milvus-guide.md) | Milvus 向量库定义 / 部署形态 / 集成 AnyKB |
+| [docs/milvus-guide.md](docs/milvus-guide.md) | Milvus 向量库定义 / 部署形态 / 集成 know |
 | [docs/curation-sop.md](docs/curation-sop.md) | 添加 / 维护策展数据 |
 | [docs/tutorial.md](docs/tutorial.md) | 端到端流程教学（适合给团队培训用） |
 

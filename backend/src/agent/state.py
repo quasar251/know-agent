@@ -38,3 +38,11 @@ class AgentState(TypedDict, total=False):
     # all-empty dict (→ L1 omitted); long_term_memory may be [] (→ L2 omitted).
     user_profile: dict[str, Any]
     long_term_memory: list[dict[str, Any]]
+    # v3-M8 (perf): KB-bound chats run a single up-front ``search_kb`` in the
+    # ``retrieve`` node (retrieve-then-generate). ``retrieved`` guards against
+    # re-running it if the node is ever revisited. ``answer_streamed`` tells the
+    # SSE layer that the final answer was already streamed token-by-token from
+    # plan_node, so it must NOT replay `final_report` a second time. Both stay
+    # absent (falsy) for travel / general chat → identical to pre-M8 behavior.
+    retrieved: bool
+    answer_streamed: bool

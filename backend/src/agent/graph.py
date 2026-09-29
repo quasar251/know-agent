@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable, TYPE_CHECKING
 
 from langgraph.graph import END, StateGraph
 
-from src.agent.nodes import call_tools_node, plan_node, should_continue
+from src.agent.nodes import call_tools_node, plan_node, retrieve_node, should_continue
 from src.agent.prompts import (
     SYSTEM_PROMPT_GENERAL,
     SYSTEM_PROMPT_TRAVEL,
@@ -77,6 +77,12 @@ def build_graph(
 
     cost = CostTracker()
 
+    # v3-M8 (perf): KB-bound chats retrieve once up-front (retrieve → plan)
+    # instead of letting the LLM loop over ``search_kb`` (a full non-streaming
+    # round-trip per retrieval). ``search_kb`` is hidden from the plan schema so
+    # it cannot be re-invoked; the chunks arrive as a synthetic tool_result.
+    is_kb = kb is not None and kb.id != SYSTEM_TRAVEL_KB_ID
+
     async def _noop_emit(_evt: dict[str, Any]) -> None:
         return None
 
@@ -96,6 +102,8 @@ def build_graph(
             include_travel_skill=include_travel_skill,
             include_kb_skill=include_kb_skill,
             llm_cfg=llm_cfg,
+            emit=em,
+            hidden_tools=frozenset({"search_kb"}) if is_kb else frozenset(),
         ),
     )
     g.add_node(
@@ -103,7 +111,16 @@ def build_graph(
         partial(call_tools_node, registry=registry, emit=em, llm_cfg=llm_cfg),
     )
 
-    g.set_entry_point("plan")
+    if is_kb:
+        g.add_node(
+            "retrieve",
+            partial(retrieve_node, registry=registry, emit=em),
+        )
+        g.set_entry_point("retrieve")
+        g.add_edge("retrieve", "plan")
+    else:
+        g.set_entry_point("plan")
+
     g.add_conditional_edges("plan", should_continue, {"tools": "call_tools", "end": END})
     g.add_edge("call_tools", "plan")
     return g.compile(), cost

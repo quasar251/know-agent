@@ -52,6 +52,7 @@ from src.kb.ingest import (
 )
 from src.kb.models import KB, Document, KBInvitation, KBMember
 from src.kb.parsers import SUPPORTED_EXTS
+from src.settings import get_settings
 from src.settings_user import require_user_embedding, resolve_user_embedding
 from src.settings_user.kb_resolvers import resolve_kb_embedding
 
@@ -62,9 +63,13 @@ router = APIRouter(prefix="/api/kbs", tags=["kbs"])
 invitations_router = APIRouter(prefix="/api/invitations", tags=["invitations"])
 
 
-# Max single-upload size: 50 MB. Bigger files should be split or moved to a
-# dedicated worker (out of scope for v1).
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+def _max_upload_bytes() -> int:
+    """Per-upload size cap, env-tunable via MAX_UPLOAD_BYTES (default 200 MB).
+
+    Scanned handbooks exceed the old hard-coded 50 MB; keeping this in settings
+    lets operators raise the cap without a code change.
+    """
+    return get_settings().max_upload_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -574,10 +579,11 @@ async def upload_document(
         content = await file.read()
         if len(content) == 0:
             raise HTTPException(status_code=400, detail="empty file")
-        if len(content) > MAX_UPLOAD_BYTES:
+        max_bytes = _max_upload_bytes()
+        if len(content) > max_bytes:
             raise HTTPException(
                 status_code=413,
-                detail=f"file too large ({len(content)} > {MAX_UPLOAD_BYTES})",
+                detail=f"file too large ({len(content)} > {max_bytes})",
             )
         save_uploaded_file(kb_id, doc_id, file.filename or f"upload.{ext}", content)
         doc = Document(
