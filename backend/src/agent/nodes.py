@@ -53,6 +53,10 @@ async def retrieve_node(
             "error": result.error,
         }
     )
+    # Surface the retrieved sources (filename + relevance) so the chat UI can
+    # render a "参考来源" list under the answer.
+    raw = result.raw if isinstance(result.raw, dict) else {}
+    await emit({"event": "sources", "sources": raw.get("sources") or []})
     chunks = result.text if result.error is None else f"[tool error] {result.error}"
 
     tcid = "kb-autoretrieval-1"

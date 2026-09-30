@@ -2,6 +2,7 @@
 
 import { authFetch } from "./auth";
 import type { ToolEvent } from "@/components/ThinkingChain";
+import type { SourceRef } from "./conversationStore";
 
 /**
  * Conversations API client (v2-M3).
@@ -36,6 +37,7 @@ export type MessagePayload = {
   role: "user" | "assistant";
   content: string;
   tools: ToolEvent[] | null;
+  sources: SourceRef[] | null;
   cost_usd: number | null;
   error: string | null;
   created_at: string | null;
@@ -194,6 +196,7 @@ export async function appendAssistantMessage(
   payload: {
     content: string;
     tools?: ToolEvent[];
+    sources?: SourceRef[];
     cost_usd?: number;
     error?: string;
   }
@@ -206,6 +209,7 @@ export async function appendAssistantMessage(
         role: "assistant",
         content: payload.content,
         tools: payload.tools && payload.tools.length > 0 ? payload.tools : undefined,
+        sources: payload.sources && payload.sources.length > 0 ? payload.sources : undefined,
         cost_usd: payload.cost_usd,
         error: payload.error,
       }),

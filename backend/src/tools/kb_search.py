@@ -173,22 +173,33 @@ class KBSearchTool(Tool):
             return ToolResult(
                 text=f"知识库「{self.kb_name}」中没有找到与「{query}」相关的内容。",
                 latency_ms=0,
-                raw={"hits": 0, "kb_id": self.kb_id},
+                raw={"hits": 0, "kb_id": self.kb_id, "sources": []},
             )
 
         # Format: per-chunk block with source filename + score for citation.
+        # `sources` is the structured, UI-facing companion to the text above:
+        # one entry per distinct filename (highest score wins), so the chat UI
+        # can show "参考来源: 文件名 + 相关度" without re-parsing the blocks.
         blocks: list[str] = []
+        best_by_file: dict[str, float] = {}
         for i, c in enumerate(hits, start=1):
             p = c.get("payload", {}) or {}
             filename = p.get("filename", "(unknown)")
             text = (p.get("text") or "").strip()
-            score = c.get("score", 0.0)
+            score = float(c.get("score", 0.0))
             blocks.append(
                 f"[chunk {i}] 来源: {filename}  相关度: {score:.3f}\n{text}"
             )
+            if filename not in best_by_file or score > best_by_file[filename]:
+                best_by_file[filename] = score
+
+        sources = [
+            {"filename": fn, "score": round(sc, 3)}
+            for fn, sc in sorted(best_by_file.items(), key=lambda kv: kv[1], reverse=True)
+        ]
 
         return ToolResult(
             text="\n\n---\n\n".join(blocks),
             latency_ms=0,
-            raw={"hits": len(hits), "kb_id": self.kb_id},
+            raw={"hits": len(hits), "kb_id": self.kb_id, "sources": sources},
         )

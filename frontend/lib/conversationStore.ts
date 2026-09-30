@@ -11,6 +11,13 @@ import type { ToolEvent } from "@/components/ThinkingChain";
  * before SSE done fires and we persist).
  */
 
+export type SourceRef = {
+  /** Source document filename (as ingested into the KB). */
+  filename: string;
+  /** Best relevance score across the retrieved chunks of this file. */
+  score: number;
+};
+
 export type Message =
   | {
       id: string;
@@ -23,6 +30,7 @@ export type Message =
       role: "assistant";
       content: string;          // markdown report
       tools: ToolEvent[];        // tool call timeline
+      sources?: SourceRef[];     // retrieved KB sources (filename + relevance)
       streaming?: boolean;
       cost_usd?: number;
       error?: string;

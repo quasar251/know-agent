@@ -45,6 +45,7 @@ import {
   genMessageId,
   type Conversation,
   type Message,
+  type SourceRef,
 } from "@/lib/conversationStore";
 
 type HeroMode = "unbound" | "travel" | "user-kb";
@@ -89,6 +90,7 @@ function serverMsgToLocal(m: MessagePayload): Message {
     role: "assistant",
     content: m.content,
     tools: m.tools ?? [],
+    sources: m.sources ?? [],
     cost_usd: m.cost_usd ?? undefined,
     error: m.error ?? undefined,
     created_at: ts,
@@ -133,6 +135,7 @@ export default function Page() {
     msgId: string;
     content: string;
     tools: ToolEvent[];
+    sources: SourceRef[];
   } | null>(null);
 
   const [kbs, setKbs] = useState<KB[]>([]);
@@ -378,6 +381,7 @@ export default function Page() {
         role: "assistant",
         content: "",
         tools: [],
+        sources: [],
         streaming: true,
         created_at: Date.now(),
       };
@@ -387,6 +391,7 @@ export default function Page() {
         msgId: aiId,
         content: "",
         tools: [],
+        sources: [],
       };
 
       // Optimistic sidebar title/count bump. Server will derive the same
@@ -418,6 +423,7 @@ export default function Page() {
           const result = await appendAssistantMessage(snap.convId, {
             content: snap.content,
             tools: snap.tools,
+            sources: snap.sources,
             cost_usd: opts.costUsd,
             error: opts.error,
           });
@@ -508,6 +514,16 @@ export default function Page() {
               );
               break;
             }
+            case "sources": {
+              const sources = evt.sources ?? [];
+              if (streamingRef.current) {
+                streamingRef.current.sources = sources;
+              }
+              updateLastAssistant((m) =>
+                m.role === "assistant" ? { ...m, sources } : m
+              );
+              break;
+            }
             case "error": {
               const errMsg = evt.message ?? "unknown error";
               updateLastAssistant((m) =>
@@ -575,6 +591,7 @@ export default function Page() {
       void appendAssistantMessage(snap.convId, {
         content: snap.content,
         tools: snap.tools,
+        sources: snap.sources,
         error: "用户已停止生成",
       })
         .then((result) => {

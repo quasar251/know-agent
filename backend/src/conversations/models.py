@@ -121,6 +121,9 @@ class Message(Base):
 
     # Assistant-only fields. tool_call_log is JSON-encoded ToolEvent[].
     tool_call_log: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    # Retrieved sources shown under the answer (filename + relevance).
+    # JSON-encoded SourceRef[] — same text-column pattern as tool_call_log.
+    sources: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
     error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
 
@@ -139,12 +142,21 @@ class Message(Base):
                 tools = json.loads(self.tool_call_log)
             except (ValueError, TypeError):
                 tools = None
+
+        sources: list | None = None
+        if self.sources:
+            try:
+                sources = json.loads(self.sources)
+            except (ValueError, TypeError):
+                sources = None
+
         return {
             "id": self.id,
             "role": self.role,
             "content": self.content or "",
             # Frontend expects `tools` (matches ChatEvent / ToolEvent[]).
             "tools": tools if tools is not None else ([] if self.role == "assistant" else None),
+            "sources": sources if sources is not None else ([] if self.role == "assistant" else None),
             "cost_usd": self.cost_usd,
             "error": self.error or None,
             "created_at": self.created_at.isoformat() if self.created_at else None,

@@ -1,8 +1,11 @@
+import type { SourceRef } from "@/lib/conversationStore";
+
 export type ChatEvent = {
   event:
     | "tool_start"
     | "tool_end"
     | "tool_blocked"
+    | "sources"
     | "report_start"
     | "token"
     | "done"
@@ -17,6 +20,8 @@ export type ChatEvent = {
   cost_usd?: number;
   message?: string;
   kb_id?: string | null;
+  /** "sources" event: retrieved KB sources (filename + relevance). */
+  sources?: SourceRef[];
   /** v2-M2 BYOK gate: `llm_not_configured` | `embedding_not_configured` */
   code?: string;
   /** Where the UI should send the user when code is set. */

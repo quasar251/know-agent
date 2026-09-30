@@ -253,3 +253,11 @@ def _migrate_additive_columns(sync_conn) -> None:
                     "TIMESTAMP WITH TIME ZONE"
                 )
             )
+
+    # messages.sources: JSON-encoded SourceRef[] (filename + relevance) shown
+    # under each assistant answer. Nullable TEXT, portable across SQLite /
+    # PostgreSQL — runs against the already-existing prod messages table.
+    if "messages" in tables:
+        msg_cols = {c["name"] for c in insp.get_columns("messages")}
+        if "sources" not in msg_cols:
+            sync_conn.execute(text("ALTER TABLE messages ADD COLUMN sources TEXT"))

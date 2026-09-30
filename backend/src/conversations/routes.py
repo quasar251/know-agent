@@ -54,6 +54,8 @@ class AppendMessageRequest(BaseModel):
     content: str = Field(default="")
     # Frontend passes ToolEvent[] as `tools`; stored as JSON text in DB.
     tools: list[dict[str, Any]] | None = Field(default=None)
+    # Retrieved sources (filename + relevance); stored as JSON text in DB.
+    sources: list[dict[str, Any]] | None = Field(default=None)
     cost_usd: float | None = Field(default=None)
     error: str | None = Field(default=None, max_length=4096)
 
@@ -62,6 +64,7 @@ class ImportMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str = ""
     tools: list[dict[str, Any]] | None = None
+    sources: list[dict[str, Any]] | None = None
     cost_usd: float | None = None
     error: str | None = None
     # Epoch ms (client). Server converts → datetime to preserve original time.
@@ -271,6 +274,7 @@ async def append_message(
         role=req.role,
         content=req.content or "",
         tool_call_log=json.dumps(req.tools, ensure_ascii=False) if req.tools else None,
+        sources=json.dumps(req.sources, ensure_ascii=False) if req.sources else None,
         cost_usd=req.cost_usd,
         error=req.error or None,
     )
@@ -439,6 +443,7 @@ async def import_conversations(
                     role=m.role,
                     content=m.content or "",
                     tool_call_log=json.dumps(m.tools, ensure_ascii=False) if m.tools else None,
+                    sources=json.dumps(m.sources, ensure_ascii=False) if m.sources else None,
                     cost_usd=m.cost_usd,
                     error=m.error or None,
                     created_at=m_created,

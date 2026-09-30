@@ -1,10 +1,10 @@
 "use client";
 
-import { User, Bot } from "lucide-react";
+import { FileText, User, Bot } from "lucide-react";
 import ThinkingChain, { type ToolEvent } from "@/components/ThinkingChain";
 import ReportView from "@/components/ReportView";
 import ExportActions from "@/components/ExportActions";
-import type { Message } from "@/lib/conversationStore";
+import type { Message, SourceRef } from "@/lib/conversationStore";
 
 export default function MessageBubble({
   message,
@@ -32,6 +32,8 @@ export default function MessageBubble({
   // assistant
   const hasContent = message.content && message.content.length > 0;
   const hasTools = message.tools && message.tools.length > 0;
+  const sources = message.sources ?? [];
+  const hasSources = sources.length > 0;
   const streaming = !!message.streaming;
 
   const showInitialThinking = streaming && !hasTools && !hasContent && !message.error;
@@ -69,6 +71,8 @@ export default function MessageBubble({
             <div className="text-sm text-muted">（无内容）</div>
           )}
 
+          {hasSources && <SourcesList sources={sources} content={message.content} />}
+
           {hasContent && !streaming && (
             <ExportActions
               markdown={message.content}
@@ -78,6 +82,48 @@ export default function MessageBubble({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SourcesList({ sources, content }: { sources: SourceRef[]; content: string }) {
+  // A source counts as "cited" when the answer text mentions its filename —
+  // a cheap, robust signal that the model explicitly referenced it.
+  const cited = (fn: string) => !!content && content.includes(fn);
+  const anyCited = sources.some((s) => cited(s.filename));
+
+  return (
+    <div className="rounded-xl border border-fg/10 bg-fg/[0.02] p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted">
+        <FileText className="h-3.5 w-3.5" />
+        <span>参考来源（{sources.length}）</span>
+      </div>
+      <ul className="space-y-1.5">
+        {sources.map((s) => {
+          const isCited = cited(s.filename);
+          return (
+            <li key={s.filename} className="flex items-center gap-2 text-xs">
+              <span className={isCited ? "text-accent" : "text-muted"}>
+                {isCited ? "★" : "·"}
+              </span>
+              <span
+                className={`min-w-0 truncate ${
+                  isCited ? "font-medium text-accent" : "text-fg/70"
+                }`}
+                title={s.filename}
+              >
+                {s.filename}
+              </span>
+              <span className="ml-auto flex-none text-muted">
+                相关度 {s.score.toFixed(3)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {anyCited && (
+        <div className="mt-2 text-[11px] text-muted">★ 表示正文中明确引用的来源</div>
+      )}
     </div>
   );
 }
