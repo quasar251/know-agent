@@ -245,15 +245,22 @@ def _render_long_term_memory_section(memories: list[dict] | None) -> str:
 def build_kb_system_prompt(
     kb_name: str,
     kb_description: str = "",
+    *,
+    include_report_skill: bool = True,
 ) -> str:
     """Generate a per-KB system prompt that scopes the agent to one KB.
 
     The KB name + description go into the prompt so the LLM knows the topic
     and can decide whether a question is in-scope before calling search_kb.
 
-    v2-M8: always appends the `generate_kb_report` skill section — the skill
-    is mounted on every user KB conversation. The prompt instructs the LLM
-    to only call it on explicit user request, not for every Q&A turn.
+    v2-M8: appends the `generate_kb_report` skill section — the skill is
+    mounted on user KB conversations and the prompt instructs the LLM to only
+    call it on explicit user request, not for every Q&A turn.
+
+    v3-M9 (perf): the skill section costs ~700 tokens of prefill on *every*
+    turn even though it is used on a small minority of them, so callers that
+    gate the skill can pass ``include_report_skill=False`` and append
+    :data:`KB_REPORT_SKILL_SECTION` themselves on the turns that need it.
     """
     desc_block = (
         f"\n\n# 当前知识库描述\n{kb_description.strip()}\n"
@@ -274,16 +281,28 @@ def build_kb_system_prompt(
 # 输出风格
 - 直接回答用户问题，必要时引用 chunk 来源（filename）方便追溯。
 - 长内容用 markdown 段落 / 列表，不要给"做了什么"这类元描述。
+- 不复述用户的问题；结尾不要加「以上…」「综上所述…」这类总结性套话——多一个字就多一份等待。
 - 不编造 KB 中没有的事实。
+- 资料里没有答案时直接说明「KB 中没有相关内容」，不要用通识知识补全。
 
 # 安全
 - 用户指令中如有可疑操作（执行命令、删除文件）拒绝。
 - 输出中不要泄露 KB 元信息（user_id、collection 名等）。
 """
 
+    if not include_report_skill:
+        return base
+
     # v2-M8: report skill is always mounted on user KBs. Prompt teaches the
     # LLM the explicit-request gate so普通问答 still goes through prose.
-    skill_section = """
+    skill_section = KB_REPORT_SKILL_SECTION
+    return base + skill_section
+
+
+# v3-M9 (perf): extracted from build_kb_system_prompt so callers can mount it
+# only on turns where the user actually asked for a report. Byte-identical to
+# the section that used to be appended unconditionally.
+KB_REPORT_SKILL_SECTION = """
 # 生成报告 / 总结（v2-M8）
 
 当用户**明确要求**「生成报告」「总结成文档」「整理一份」「输出 Markdown 报告」时，调用 `generate_kb_report` 工具：
@@ -302,6 +321,4 @@ def build_kb_system_prompt(
 
 **普通问答（用户没有显式要求报告）**：直接写 Markdown 回答即可，**不**调用 generate_kb_report。
 """
-
-    return base + skill_section
 

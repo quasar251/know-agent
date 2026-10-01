@@ -431,7 +431,7 @@ async def _compress_rounds(
     skills.loader — NO hardcoded vendor or model (PRD 2026-07-16 decision).
     Single turn, no tools. Returns "" on any failure (caller skips + retries).
     """
-    from src.infra.llm import get_client, with_cache_control
+    from src.infra.llm import get_client, with_cache_control, with_extra_body
 
     convo = "\n\n".join(_round_to_text(r) for r in rounds if _round_to_text(r))
     if not convo.strip():
@@ -464,12 +464,16 @@ async def _compress_rounds(
 
         if not is_anthropic:
             resp = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=400,
+                **with_extra_body(
+                    {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "max_tokens": 400,
+                    }
+                )
             )
             return (resp.choices[0].message.content or "").strip()
 

@@ -3,11 +3,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, TYPE_CHECKING
 
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.state import AgentState
-from src.infra.llm import CostTracker, get_client, pick_model, with_cache_control, convert_to_openai_format
+from src.infra.llm import (
+    CostTracker,
+    get_client,
+    get_shared_client,
+    pick_model,
+    with_cache_control,
+    with_extra_body,
+    convert_to_openai_format,
+)
+
+# Captured so _resolve_llm_client can tell a monkeypatched factory from the
+# real one (tests inject fake clients by replacing nodes.get_client).
+_DEFAULT_GET_CLIENT = get_client
 from src.safety.output_filter import StreamRedactor
 from src.safety.tool_guard import is_tool_allowed
 from src.skills.loader import invoke_skill
@@ -18,6 +31,37 @@ if TYPE_CHECKING:
 
 MAX_ITERATIONS = 10
 _KB_RETRIEVAL_LIMIT = 5
+
+# v3-M9 (perf): `generate_kb_report` + its ~700-token system section used to be
+# mounted on every KB turn. Mounting the tool also puts the request into
+# tool-calling mode, which costs prefill tokens even when the tool is never
+# called. Gate both on an explicit-report request in the user's message.
+#
+# Deliberately over-inclusive: false positives only cost the (old) prefill,
+# while false negatives would silently break the report feature.
+_KB_REPORT_INTENT_RE = re.compile(
+    r"报告|报道|汇报|report"
+    r"|(?:总结|汇总|归纳|梳理|整理|概括|提炼).{0,8}(?:文档|报告|成文|一份|材料|清单|表格|markdown|md)"
+    r"|(?:生成|输出|导出|写成|整理成|做成).{0,4}(?:报告|文档|材料|markdown|md)"
+    r"|\bmarkdown\b|\bmd\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_kb_report(text: str) -> bool:
+    """True when the user's turn looks like an explicit "make me a report" ask."""
+    return bool(text) and _KB_REPORT_INTENT_RE.search(text) is not None
+
+
+def _resolve_llm_client(llm_cfg: "UserLLMConfig | None"):
+    """Return the SDK client for a plan step, preferring a shared/cached one.
+
+    A module-level override of ``get_client`` (used by tests to inject fake
+    clients) always wins over the cache.
+    """
+    if get_client is not _DEFAULT_GET_CLIENT:
+        return get_client(llm_cfg)
+    return get_shared_client(llm_cfg)
 
 
 async def retrieve_node(
@@ -41,6 +85,12 @@ async def retrieve_node(
     query = _last_user_text(state.get("messages", []))
     if not query:
         return state
+
+    # v3-M9 (perf): configurable — these chunks are ~75% of the prompt, so the
+    # count is the main input-side latency dial (prefill ≈ 0.22 ms / token).
+    from src.settings import get_settings
+
+    limit = limit or get_settings().kb_retrieval_limit
 
     await emit({"event": "tool_start", "name": "search_kb", "input": {"query": query}})
     result = await registry.call("search_kb", {"query": query, "limit": limit})
@@ -109,6 +159,7 @@ async def plan_node(
     llm_cfg: "UserLLMConfig | None" = None,
     emit=None,
     hidden_tools: frozenset[str] = frozenset(),
+    kb_report_skill_prompt: str = "",
 ) -> AgentState:
     """LLM decides next action: call tools, call skill, or finish.
 
@@ -144,19 +195,29 @@ async def plan_node(
     if iters >= MAX_ITERATIONS:
         return {**state, "final_report": "超出最大推理轮数限制。", "pending_tool_calls": []}
 
+    s = get_settings()
+
     messages = state.get("messages", [])
     extra: list[dict[str, Any]] = []
     if include_travel_skill:
         extra.append(_skill_tool_schema())
-    if include_kb_skill:
+    if include_kb_skill and (
+        not kb_report_skill_prompt
+        or not s.kb_report_skill_gating
+        or _wants_kb_report(_last_user_text(messages))
+    ):
+        # Mounting the tool also means mounting its system section — they are a
+        # pair, otherwise the LLM would be told to call a tool it can't see.
         extra.append(_kb_skill_tool_schema())
+        if kb_report_skill_prompt:
+            system_prompt = f"{system_prompt}\n{kb_report_skill_prompt}"
     tools_schema = [
         t for t in registry.all_schemas() if t.get("name") not in hidden_tools
     ] + extra
     model = pick_model(messages, tools_schema, llm_cfg)
-    client = get_client(llm_cfg)
-
-    s = get_settings()
+    # v3-M9 (perf): cached client — a fresh SDK client per turn meant a fresh
+    # httpx pool, i.e. a DNS + TCP + TLS handshake before every first token.
+    client = _resolve_llm_client(llm_cfg)
 
     # v3-M2: fetch the early-history summary (L4) for this conversation. Only
     # when short-term memory is on AND the session id flowed in; any failure or
@@ -165,49 +226,72 @@ async def plan_node(
     # (even "") is cached into agent state so later plan iterations (tool
     # rounds, up to MAX_ITERATIONS) don't re-hit Redis/PG.
     early_summary = state.get("early_summary")
-    if early_summary is None:
-        early_summary = ""
-        conv_id = state.get("conversation_id")
-        user_id = state.get("user_id")
-        if conv_id and user_id:
-            try:
-                from src.conversations.short_term_memory import get_context_summary
-
-                early_summary = await get_context_summary(user_id, conv_id) or ""
-            except Exception:  # noqa: BLE001 — L4 is best-effort, never break planning.
-                early_summary = ""
-
-    # v3-M3: fetch the L1 user profile + L2 long-term memories ONCE per request
-    # (keyed off "long_term_memory" not yet being in state), then cache both into
-    # agent state so tool-loop iterations skip the Redis/Milvus/PG reads — same
-    # once-per-request pattern as early_summary above. Requires user_id in state;
-    # anonymous / old-frontend requests (no user_id) skip L1+L2 entirely, which
-    # keeps their prompt identical to pre-M3. Any failure degrades to empty →
-    # the corresponding layer is simply omitted, never a broken plan step.
     user_profile = state.get("user_profile")
     long_term_memory = state.get("long_term_memory")
-    if "long_term_memory" not in state:
-        user_profile = {}
-        long_term_memory = []
-        user_id = state.get("user_id")
-        if user_id:
-            from src.conversations.long_term_memory import (
-                get_user_profile,
-                retrieve_long_term_memories,
-            )
 
+    # v3-M9 (perf): L4 / L1 / L2 are three *independent* IO reads (Redis, PG,
+    # Milvus + an embedding call) that used to be awaited one after another, so
+    # the plan step paid the sum of their latencies before the LLM was even
+    # called. They are issued concurrently below; each one keeps its original
+    # best-effort contract (failure → empty layer, never a broken plan step).
+    user_id = state.get("user_id")
+    conv_id = state.get("conversation_id")
+    need_l4 = early_summary is None and bool(conv_id and user_id)
+    need_l1l2 = "long_term_memory" not in state and bool(user_id)
+
+    if need_l4 or need_l1l2:
+        from src.conversations.long_term_memory import (
+            get_user_profile,
+            retrieve_long_term_memories,
+        )
+        from src.conversations.short_term_memory import get_context_summary
+
+        async def _l4() -> str:
             try:
-                user_profile = await get_user_profile(user_id)
+                return (await get_context_summary(user_id, conv_id)) or ""
+            except Exception:  # noqa: BLE001 — L4 is best-effort.
+                return ""
+
+        async def _l1() -> dict:
+            try:
+                return await get_user_profile(user_id)
             except Exception:  # noqa: BLE001 — L1 best-effort.
-                user_profile = {}
+                return {}
+
+        async def _l2() -> list:
             try:
                 # L2 query is the current user input (last plain user message).
-                long_term_memory = (
+                return (
                     await retrieve_long_term_memories(user_id, _last_user_text(messages))
                     or []
                 )
             except Exception:  # noqa: BLE001 — L2 best-effort.
-                long_term_memory = []
+                return []
+
+        pending_coros: list[Any] = []
+        if need_l4:
+            pending_coros.append(_l4())
+        if need_l1l2:
+            pending_coros.append(_l1())
+            pending_coros.append(_l2())
+
+        results = await asyncio.gather(*pending_coros, return_exceptions=True)
+
+        def _ok(idx: int, default: Any) -> Any:
+            if idx >= len(results):
+                return default
+            val = results[idx]
+            return default if isinstance(val, BaseException) else val
+
+        cursor = 0
+        if need_l4:
+            early_summary = _ok(cursor, "")
+            cursor += 1
+        if need_l1l2:
+            user_profile = _ok(cursor, {})
+            long_term_memory = _ok(cursor + 1, [])
+    elif early_summary is None:
+        early_summary = ""
 
     # Build layered context (M1: L0 + L5; M2 adds L4; M3 adds L1 + L2 when present).
     sections = build_context_sections(
@@ -258,8 +342,15 @@ async def plan_node(
             "model": model,
             "messages": [{"role": "system", "content": layered.system_text}] + openai_messages,
             "tools": openai_tools if openai_tools else None,
-            "max_tokens": 2048,
+            # v3-M9 (perf): 2048 was a magic number ~14x the observed mean
+            # output (142 tok). It never helped quality but it is what an
+            # unbounded/hallucinating generation can grow into, so it is the
+            # main lever on the latency long tail. Now configurable.
+            "max_tokens": s.llm_max_tokens,
         }
+        # Vendor extras (e.g. turning off a default thinking phase). Empty by
+        # default so no provider sees an unexpected field.
+        req = with_extra_body(req)
         answer_text = ""
         tool_calls: list[dict[str, Any]] = []
 
@@ -331,7 +422,7 @@ async def plan_node(
         system_blocks = with_cache_control(layered.system_blocks, llm_cfg)
         areq: dict[str, Any] = {
             "model": model,
-            "max_tokens": 2048,
+            "max_tokens": s.llm_max_tokens,
             "system": system_blocks,
             "messages": layered.messages,
             "tools": tools_schema or None,

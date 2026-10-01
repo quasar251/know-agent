@@ -139,6 +139,39 @@ class Settings(BaseSettings):
     memory_window_size: int = 10       # short-term window (rounds), 0 = keep all
     context_total_budget: int = 8000   # total token budget for LLM context
 
+    # ===== Latency tuning (v3-M9 perf) =====
+    # Measured cost model (see eval/REPORT.md): the LLM decode window dominates
+    # end-to-end latency (~46 ms / output token), prefill is ~0.22 ms / input
+    # token, and retrieval is only ~4% of the total. These knobs therefore target
+    # (a) shaving input tokens, (b) cutting the upstream long tail, (c) removing
+    # redundant per-request work. None of them change answer semantics.
+    llm_max_tokens: int = 1024         # hard cap on generated tokens (was hard-coded 2048)
+    llm_client_reuse: bool = True      # reuse AsyncOpenAI/AsyncAnthropic per (provider,url,key)
+    kb_retrieval_limit: int = 5        # chunks handed to the LLM per turn
+    # Vendor-specific request-body extras, merged into every OpenAI-compatible
+    # chat call. JSON object as a string, e.g.
+    #   LLM_EXTRA_BODY={"thinking": {"type": "disabled"}}
+    # Reasoning models often default to a thinking phase: it inflates TTFT and,
+    # because the agent replays assistant turns back to the API, a thinking
+    # model that requires `reasoning_content` to be echoed makes the request
+    # fail outright (HTTP 400). Default empty = send nothing extra, so no
+    # provider is affected unless explicitly opted in.
+    llm_extra_body: str = ""
+    # Deadlines for the two upstream retrieval calls. On expiry we degrade
+    # instead of stalling the whole turn: rerank falls back to first-stage
+    # order, embed raises (caller degrades to "no KB context").
+    embed_timeout_ms: int = 15000
+    rerank_timeout_ms: int = 1200      # p50 rerank is ~166 ms, so this only clips the tail
+    rerank_overfetch_multiplier: int = 4
+    rerank_overfetch_cap: int = 30
+    # Process-local LRU over query embeddings. A turn embeds the same question
+    # twice (KB search + L2 long-term memory recall); this makes the second one
+    # free. 0 disables.
+    embedding_cache_size: int = 512
+    # Report-skill gating: `generate_kb_report` + its ~1k-token system section are
+    # only mounted when the user's message looks like an explicit report request.
+    kb_report_skill_gating: bool = True
+
     # ===== Short-term memory (v3-M2 memory-optimization) =====
     # Master switch for the M2 short-term memory feature. Empty (default) =
     # feature off: no Redis writes, no compression, no L4 summary injection —

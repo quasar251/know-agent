@@ -47,6 +47,10 @@ from src.settings_user import (
 logging.basicConfig(level=logging.INFO)
 log = structlog.get_logger()
 
+# v3-M9 (perf): upper bound on the artificial pacing used when replaying an
+# already-generated skill report over SSE (see _run_chat_session).
+_REPLAY_PACING_BUDGET_S = 0.4
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
@@ -76,6 +80,14 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     log.info("memory_maintenance", running=maintenance_task is not None)
     yield
     await stop_memory_maintenance()
+    # v3-M9 (perf): release the cached LLM/embedding/rerank HTTP pools.
+    from src.infra import embedding as _embedding
+    from src.infra import reranker as _reranker
+    from src.infra.llm import aclose_clients
+
+    await aclose_clients()
+    await _embedding.aclose()
+    await _reranker.aclose()
     log.info("shutdown")
 
 
@@ -253,11 +265,20 @@ def _run_chat_session(
             # with answer_streamed falsy → replay as before so their markdown
             # gets the paced ``token`` treatment.
             if not final_state.get("answer_streamed"):
+                # v3-M9 (perf): this path replays an already-finished report
+                # (skill output), so the pacing sleep is pure added latency —
+                # 8 chars per 20 ms means a 2 000-char report burned ~5 s of
+                # wall clock after the content was already in hand. Emit in
+                # bigger pieces with a budget-capped total pacing instead.
                 report = redact_pii(final_state.get("final_report") or "")
                 await queue.put({"event": "report_start"})
-                for piece in _chunks(report, size=8):
+                pieces = _chunks(report, size=64)
+                pacing = min(_REPLAY_PACING_BUDGET_S, len(pieces) * 0.004)
+                delay = pacing / len(pieces) if pieces else 0.0
+                for piece in pieces:
                     await queue.put({"event": "token", "text": piece})
-                    await asyncio.sleep(0.02)
+                    if delay:
+                        await asyncio.sleep(delay)
             await queue.put(
                 {
                     "event": "done",

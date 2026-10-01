@@ -17,8 +17,10 @@ path — pick whichever you prefer.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
+from collections import OrderedDict
 from typing import Any, TYPE_CHECKING
 
 import httpx
@@ -144,16 +146,67 @@ async def aclose() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Query-embedding memo (v3-M9 perf) — see embed()
+# ---------------------------------------------------------------------------
+# Bounded LRU; keyed on the resolved provider config so a user switching
+# embedding provider never reads another provider's vectors.
+_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
+_CACHE_MAX: int = 0  # resolved lazily from settings so tests can override
+
+
+def _cache_max() -> int:
+    global _CACHE_MAX
+    if _CACHE_MAX == 0:
+        try:
+            _CACHE_MAX = int(get_settings().embedding_cache_size)
+        except Exception:  # noqa: BLE001 — settings always has the field
+            _CACHE_MAX = 0
+    return _CACHE_MAX
+
+
+def _cache_key(resolved: dict[str, Any], text: str) -> str:
+    ident = f"{resolved['protocol']}|{resolved['base_url']}|{resolved['model']}"
+    return hashlib.sha1(f"{ident}|{text}".encode("utf-8")).hexdigest()
+
+
+def clear_cache() -> None:
+    """Drop every memoized embedding (tests / provider switch)."""
+    _CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 async def embed(text: str, cfg: "UserEmbeddingConfig | None" = None) -> list[float]:
     resolved = _resolve_config(cfg)
     if resolved["protocol"] == "hashmock":
         return _embed_hashmock(text)
+
+    # v3-M9 (perf): one chat turn embeds the very same question twice — once for
+    # KB search and once for L2 long-term-memory recall (see
+    # plan_node / retrieve_long_term_memories). At ~100-190 ms per upstream call
+    # that is the most expensive duplicated work in the request. Memoize by
+    # (protocol, base_url, model, text) so the second one is free.
+    cache_key = None
+    if _cache_max() > 0:
+        cache_key = _cache_key(resolved, text)
+        hit = _CACHE.get(cache_key)
+        if hit is not None:
+            _CACHE.move_to_end(cache_key)
+            return list(hit)
+
     if resolved["protocol"] == "ollama-native":
-        return await _embed_ollama_native(text, resolved)
-    # openai-compatible (covers OpenAI, SiliconFlow, Together, Groq, vLLM, LMStudio, etc.)
-    return await _embed_openai_compat(text, resolved)
+        vec = await _embed_ollama_native(text, resolved)
+    else:
+        # openai-compatible (OpenAI, SiliconFlow, Together, Groq, vLLM, LMStudio…)
+        vec = await _embed_openai_compat(text, resolved)
+
+    if cache_key is not None:
+        _CACHE[cache_key] = vec
+        _CACHE.move_to_end(cache_key)
+        while len(_CACHE) > _CACHE_MAX:
+            _CACHE.popitem(last=False)
+    return vec
 
 
 async def embed_batch(
@@ -245,6 +298,20 @@ def _raise_with_upstream_detail(resp: httpx.Response) -> None:
 
 
 async def _embed_openai_compat(text: str, cfg: dict[str, Any]) -> list[float]:
+    # v3-M9 (perf): bound the upstream call. The shared client already has a
+    # 30 s timeout, but 30 s of blocking on a query embedding is a dead request
+    # from the user's point of view — measured p50 is ~100 ms with rare multi-
+    # second spikes, so clipping the tail costs almost nothing and keeps a
+    # single upstream hiccup from stalling the whole turn.
+    deadline_ms = get_settings().embed_timeout_ms
+    if deadline_ms > 0:
+        return await asyncio.wait_for(
+            _embed_openai_compat_inner(text, cfg), timeout=deadline_ms / 1000.0
+        )
+    return await _embed_openai_compat_inner(text, cfg)
+
+
+async def _embed_openai_compat_inner(text: str, cfg: dict[str, Any]) -> list[float]:
     url = f"{cfg['base_url']}/embeddings"
     headers = {"Content-Type": "application/json"}
     if cfg["api_key"]:

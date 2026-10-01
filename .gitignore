@@ -38,6 +38,10 @@ backups/
 *.db
 *.db-journal
 
+# Eval harness artifacts (generated datasets + run results)
+eval/datasets/
+eval/results/
+
 # Internal docs (not for public repo)
 docs/
 PROGRESS.md

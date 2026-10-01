@@ -23,6 +23,29 @@ import pytest
 import pytest_asyncio
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_redis(monkeypatch):
+    """Keep the suite off any real Redis.
+
+    ``backend/.env`` now sets ``REDIS_URL`` (short-term memory is enabled), which
+    would otherwise make every memory-path test write long-TTL keys into whatever
+    dev Redis happens to be running — and silently depend on it being up. Tests
+    that actually want Redis inject fakeredis through
+    ``src.infra.redis_client.set_redis()``, which still satisfies
+    ``short_term_memory_enabled()`` (the injected client counts as configured).
+    """
+    monkeypatch.setenv("REDIS_URL", "")
+
+    from src.infra import redis_client
+    from src.settings import get_settings
+
+    get_settings.cache_clear()
+    redis_client.reset_redis()
+    yield
+    redis_client.reset_redis()
+    get_settings.cache_clear()
+
+
 @pytest_asyncio.fixture
 async def db(tmp_path, monkeypatch):
     """Isolated temp-SQLite app DB with schema + additive migration applied."""

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.infra.llm import get_client, pick_model, with_cache_control
+from src.infra.llm import get_client, pick_model, with_cache_control, with_extra_body
 from src.settings import get_settings
 
 if TYPE_CHECKING:
@@ -71,12 +71,16 @@ async def invoke_skill(
 
     if not is_anthropic:
         resp = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=1500,
+            **with_extra_body(
+                {
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "max_tokens": 1500,
+                }
+            )
         )
         return resp.choices[0].message.content or ""
     resp = await client.messages.create(

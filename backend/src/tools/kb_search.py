@@ -39,6 +39,21 @@ _RERANK_OVERFETCH_MULTIPLIER = 4
 _RERANK_OVERFETCH_CAP = 30
 
 
+# v3-M9 (perf): both are env-tunable (RERANK_OVERFETCH_MULTIPLIER / _CAP)
+# because the candidate count is the dominant term in rerank latency — and
+# rerank is the largest single item in the retrieval segment.
+# Public so eval/retrieval.py (which mirrors this tool) resolves them the same
+# way instead of hard-coding a second copy that can drift.
+def overfetch_params() -> tuple[int, int]:
+    from src.settings import get_settings
+
+    s = get_settings()
+    return (
+        int(s.rerank_overfetch_multiplier) or _RERANK_OVERFETCH_MULTIPLIER,
+        int(s.rerank_overfetch_cap) or _RERANK_OVERFETCH_CAP,
+    )
+
+
 class KBSearchTool(Tool):
     name = "search_kb"
     input_schema: dict[str, Any] = {
@@ -109,11 +124,11 @@ class KBSearchTool(Tool):
             original_limit = max(1, min(int(limit) if limit else 5, 20))
             # v3-M4: when reranker is enabled, over-fetch so the cross-encoder
             # has more candidates to discriminate over.
-            fetch_limit = (
-                min(original_limit * _RERANK_OVERFETCH_MULTIPLIER, _RERANK_OVERFETCH_CAP)
-                if self.reranker_cfg
-                else original_limit
-            )
+            if self.reranker_cfg:
+                overfetch_multiplier, overfetch_cap = overfetch_params()
+                fetch_limit = min(original_limit * overfetch_multiplier, overfetch_cap)
+            else:
+                fetch_limit = original_limit
             supports_hybrid = (
                 hasattr(store, "hybrid_search")
                 and hasattr(store, "collection_supports_hybrid")

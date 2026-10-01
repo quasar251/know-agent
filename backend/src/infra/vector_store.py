@@ -333,8 +333,17 @@ class MilvusStore:
         )
         self._collection = s.qdrant_collection  # reuse default for travel demo
         self._uri = s.milvus_uri
+        # v3-M9 (perf): per-collection memos for load_collection and
+        # describe_collection results. Both are invalidated by _forget().
+        self._loaded: set[str] = set()
+        self._hybrid_support: dict[str, bool] = {}
 
     # ---- collection management ----
+
+    def _forget(self, name: str) -> None:
+        """Drop cached state for a collection whose lifecycle just changed."""
+        self._loaded.discard(name)
+        self._hybrid_support.pop(name, None)
 
     def _has(self, name: str) -> bool:
         return bool(self._client.has_collection(collection_name=name))
@@ -351,6 +360,7 @@ class MilvusStore:
     ) -> None:
         target = collection_name or self._collection
         await asyncio.to_thread(self._ensure_sync, target, vector_size)
+        self._forget(target)
 
     def _ensure_sync(self, name: str, vector_size: int) -> None:
         if self._has(name):
@@ -436,9 +446,11 @@ class MilvusStore:
     async def create_collection(self, collection_name: str, vector_size: int) -> None:
         """Create a fresh KB collection. Idempotent on matching dim."""
         await asyncio.to_thread(self._ensure_sync, collection_name, vector_size)
+        self._forget(collection_name)
 
     async def delete_collection(self, collection_name: str) -> None:
         await asyncio.to_thread(self._drop_sync, collection_name)
+        self._forget(collection_name)
 
     def _drop_sync(self, name: str) -> None:
         if not self._has(name):
@@ -485,9 +497,17 @@ class MilvusStore:
         # Collections come up 'released' after a process restart (Milvus Lite
         # never auto-loads) and search on a released collection raises
         # code=101. load_collection is idempotent on loaded collections.
+        #
+        # v3-M9 (perf): "idempotent" still costs a round-trip plus an
+        # asyncio.to_thread hop on *every* search. Remember what we already
+        # loaded — the memo is dropped whenever the collection is (re)created
+        # or deleted, so it can never go stale.
+        if collection_name in self._loaded:
+            return
         await asyncio.to_thread(
             self._client.load_collection, collection_name=collection_name
         )
+        self._loaded.add(collection_name)
 
     async def search(
         self,
@@ -567,12 +587,20 @@ class MilvusStore:
         """
         if not self._has(collection_name):
             return False
+        # v3-M9 (perf): the schema of a live collection does not change, but
+        # describe_collection was being issued on every single query. Memoized
+        # per collection; invalidated on (re)create / delete.
+        cached = self._hybrid_support.get(collection_name)
+        if cached is not None:
+            return cached
         info = await asyncio.to_thread(
             self._client.describe_collection, collection_name=collection_name
         )
-        return any(
+        supported = any(
             f.get("name") == "text_bm25" for f in info.get("fields", [])
         )
+        self._hybrid_support[collection_name] = supported
+        return supported
 
     async def hybrid_search(
         self,

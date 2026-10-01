@@ -1,6 +1,7 @@
 """LLM client wrapper supporting Anthropic and OpenAI-compatible providers."""
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
@@ -54,7 +55,12 @@ class CostTracker:
 
 
 def get_client(cfg: "UserLLMConfig | None" = None):
-    """Return appropriate client. If cfg is given, use user creds; else fall back to env."""
+    """Return appropriate client. If cfg is given, use user creds; else fall back to env.
+
+    Always constructs a NEW client — callers that own the client's lifetime
+    (e.g. the eval judge, which closes it at the end of a run) must use this.
+    Hot paths should use :func:`get_shared_client` instead.
+    """
     if cfg is not None:
         if cfg.provider == "anthropic":
             from anthropic import AsyncAnthropic
@@ -69,6 +75,59 @@ def get_client(cfg: "UserLLMConfig | None" = None):
         return AsyncOpenAI(api_key=s.deepseek_api_key, base_url=s.deepseek_base_url)
     from anthropic import AsyncAnthropic
     return AsyncAnthropic(api_key=s.anthropic_api_key, base_url=s.anthropic_base_url)
+
+
+# ---------------------------------------------------------------------------
+# Shared clients (v3-M9 perf)
+# ---------------------------------------------------------------------------
+# Building an AsyncOpenAI / AsyncAnthropic per plan_node call also builds a fresh
+# httpx connection pool underneath — every turn paid a DNS lookup + TCP + TLS
+# handshake before the first request byte could go out. Cache one client per
+# (provider, base_url, key) so the pool is reused across requests.
+_clients: dict[tuple[tuple[str, str, str], Any], Any] = {}
+
+
+def _client_key(cfg: "UserLLMConfig | None") -> tuple[str, str, str]:
+    if cfg is not None:
+        return (str(cfg.provider), str(cfg.base_url or ""), str(cfg.api_key or ""))
+    s = get_settings()
+    if s.llm_provider == "deepseek":
+        return ("deepseek", s.deepseek_base_url, s.deepseek_api_key)
+    return ("anthropic", s.anthropic_base_url, s.anthropic_api_key)
+
+
+def get_shared_client(cfg: "UserLLMConfig | None" = None):
+    """Process-wide cached SDK client (see get_client for the fresh variant).
+
+    Falls back to a per-call client when ``llm_client_reuse`` is off, so the
+    behaviour is one env flag away from the old path.
+
+    The factory function itself is part of the cache key: if a caller (or a
+    test) replaces ``get_client``, the memo misses and the replacement is
+    honoured instead of handing back a stale client from the old factory.
+    """
+    if not get_settings().llm_client_reuse:
+        return get_client(cfg)
+    key = (_client_key(cfg), get_client)
+    client = _clients.get(key)
+    if client is None:
+        client = get_client(cfg)
+        _clients[key] = client
+    return client
+
+
+async def aclose_clients() -> None:
+    """Close every cached client (app shutdown / tests)."""
+    for client in list(_clients.values()):
+        closer = getattr(client, "close", None)
+        try:
+            if closer is not None:
+                res = closer()
+                if asyncio.iscoroutine(res):
+                    await res
+        except Exception:  # noqa: BLE001 — best effort on shutdown
+            pass
+    _clients.clear()
 
 
 def pick_model(messages: list[dict], tools: list[dict], cfg: "UserLLMConfig | None" = None) -> str:
@@ -103,6 +162,42 @@ def with_cache_control(blocks: list[dict], cfg: "UserLLMConfig | None" = None) -
     out = [dict(b) for b in blocks]
     out[-1]["cache_control"] = {"type": "ephemeral"}
     return out
+
+
+def get_extra_body() -> dict[str, Any]:
+    """Parse LLM_EXTRA_BODY (JSON object string) into a request-body dict.
+
+    Returns {} when unset or malformed — a bad value must never break chat.
+    """
+    raw = get_settings().llm_extra_body
+    if not raw or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def with_extra_body(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``LLM_EXTRA_BODY`` into a ``create()`` call's keyword arguments.
+
+    ``extra_body`` is a per-request parameter, so it cannot live on the client —
+    which is exactly how call sites end up forgetting it. Every OpenAI-compatible
+    call should go through this helper.
+
+    Why it matters: on a provider that defaults to a hidden reasoning phase, the
+    thinking block consumes ``max_tokens`` and ``message.content`` comes back
+    empty. At the caller that looks like "the model returned nothing", so
+    compression / long-term extraction / skills silently degrade to their
+    fallback path instead of failing loudly. Returns *kwargs* untouched when the
+    setting is unset, so no provider sees an unexpected field.
+    """
+    extra = get_extra_body()
+    if not extra:
+        return kwargs
+    merged = {**(kwargs.get("extra_body") or {}), **extra}
+    return {**kwargs, "extra_body": merged}
 
 
 def convert_to_openai_format(messages: list[dict], tools: list[dict]) -> tuple[str, list[dict], list[dict]]:

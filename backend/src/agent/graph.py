@@ -7,6 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from src.agent.nodes import call_tools_node, plan_node, retrieve_node, should_continue
 from src.agent.prompts import (
+    KB_REPORT_SKILL_SECTION,
     SYSTEM_PROMPT_GENERAL,
     SYSTEM_PROMPT_TRAVEL,
     build_kb_system_prompt,
@@ -59,6 +60,11 @@ def build_graph(
             reranker_cfg=reranker_cfg,
         )
 
+    # v3-M9 (perf): the report-skill system section is handed to plan_node
+    # separately so it can be mounted only on turns that actually ask for a
+    # report — it's ~700 tokens of prefill otherwise, on every single turn.
+    kb_report_skill_prompt = ""
+
     if kb is None:
         system_prompt = SYSTEM_PROMPT_GENERAL
         include_travel_skill = False
@@ -71,7 +77,9 @@ def build_graph(
         system_prompt = build_kb_system_prompt(
             kb.name,
             kb.description or "",
+            include_report_skill=False,
         )
+        kb_report_skill_prompt = KB_REPORT_SKILL_SECTION
         include_travel_skill = False
         include_kb_skill = True
 
@@ -101,6 +109,7 @@ def build_graph(
             system_prompt=system_prompt,
             include_travel_skill=include_travel_skill,
             include_kb_skill=include_kb_skill,
+            kb_report_skill_prompt=kb_report_skill_prompt,
             llm_cfg=llm_cfg,
             emit=em,
             hidden_tools=frozenset({"search_kb"}) if is_kb else frozenset(),

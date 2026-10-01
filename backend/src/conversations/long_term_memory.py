@@ -220,7 +220,7 @@ async def _session_llm_complete(
     *,
     max_tokens: int = 512,
 ) -> str:
-    from src.infra.llm import get_client, with_cache_control
+    from src.infra.llm import get_client, with_cache_control, with_extra_body
 
     try:
         s = get_settings()
@@ -238,12 +238,16 @@ async def _session_llm_complete(
 
         if not is_anthropic:
             resp = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=max_tokens,
+                **with_extra_body(
+                    {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "max_tokens": max_tokens,
+                    }
+                )
             )
             return (resp.choices[0].message.content or "").strip()
 

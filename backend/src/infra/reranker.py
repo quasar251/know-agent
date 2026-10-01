@@ -16,12 +16,16 @@ Cohere, Jina, TEI, vLLM with reranker plugins all accept the same JSON.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any, TYPE_CHECKING
 
 import httpx
 
 if TYPE_CHECKING:
     from src.settings_user.models import UserRerankerConfig
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +83,15 @@ async def aclose() -> None:
     _client = None
 
 
+def _deadline_ms() -> int:
+    from src.settings import get_settings
+
+    try:
+        return int(get_settings().rerank_timeout_ms)
+    except Exception:  # noqa: BLE001 — settings always provides the field
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -106,6 +119,25 @@ async def rerank(
         return [(i, 0.0) for i in range(min(top_n, len(documents)))]
     if top_n <= 0:
         return []
+
+    # v3-M9 (perf): rerank is a best-effort *reordering* pass, so a slow upstream
+    # must never hold the answer hostage. Measured p50 is ~166 ms / p95 ~261 ms;
+    # on deadline expiry we keep first-stage (dense+BM25 RRF) order and log it,
+    # which clips the multi-second tail while leaving typical turns untouched.
+    deadline_ms = _deadline_ms()
+    if deadline_ms > 0:
+        try:
+            return await asyncio.wait_for(
+                _rerank_cohere_compat(query, documents, top_n, resolved),
+                timeout=deadline_ms / 1000.0,
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            log.warning(
+                "reranker.timeout_ms=%d docs=%d — falling back to first-stage order",
+                deadline_ms,
+                len(documents),
+            )
+            return [(i, 0.0) for i in range(min(top_n, len(documents)))]
     return await _rerank_cohere_compat(query, documents, top_n, resolved)
 
 
